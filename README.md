@@ -87,7 +87,7 @@ To release a new version:
 1. Update `version` in `manifest.json` and add the same version to `versions.json`.
 2. Commit and push.
 3. Push a tag with exactly that version, without a `v`. For example, `git tag 1.0.1 && git push origin 1.0.1`.
-4. The GitHub Action creates a draft release with `main.js`, `manifest.json` and `styles.css`. Review it and publish it.
+4. The GitHub Action attests `main.js`, `manifest.json` and `styles.css`, then creates a draft release with them and notes that list the merged pull requests. Edit the notes, then publish the release.
 
 ## Credits
 

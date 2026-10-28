@@ -9,6 +9,9 @@ on:
 
 permissions:
   contents: write
+  # For the build provenance attestation below.
+  id-token: write
+  attestations: write
 
 jobs:
   release:
@@ -28,9 +31,22 @@ jobs:
             exit 1
           }
 
+      # Lets anyone check the release files came from this repo:
+      # gh attestation verify main.js --repo nndrch/claudian-minimal
+      - name: Attest the plugin files
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: |
+            main.js
+            manifest.json
+            styles.css
+
+      # The notes list the pull requests merged since the last release.
+      # Edit them in the draft before publishing.
       - name: Create a draft release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --draft \
+            --generate-notes \
             main.js manifest.json styles.css
