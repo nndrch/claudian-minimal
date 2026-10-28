@@ -1,7 +1,14 @@
 name: Release
 
-# Push a tag that matches the version in manifest.json (for example 1.0.0,
-# no "v") to create a draft release with the three plugin files.
+# Two kinds of tag, both without a "v":
+#
+# - A version that matches manifest.json (for example 1.0.0) creates a draft
+#   release with the three plugin files. Publish it by hand.
+# - A release candidate (for example 1.1.0-rc.1) publishes a GitHub
+#   pre-release straight away, for testing before the real release. It is never
+#   "latest", so Obsidian's directory doesn't offer it to anyone. manifest.json
+#   on main isn't touched: the build gets the candidate's version, so Obsidian
+#   shows it in Settings and a later real release counts as an update.
 on:
   push:
     tags:
@@ -19,7 +26,15 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - name: Detect a release candidate
+        run: |
+          case "$GITHUB_REF_NAME" in
+            *-rc.*) echo "RC=true" >> "$GITHUB_ENV" ;;
+            *) echo "RC=false" >> "$GITHUB_ENV" ;;
+          esac
+
       - name: Check the tag matches manifest.json
+        if: env.RC != 'true'
         run: |
           version="$(jq -r .version manifest.json)"
           if [ "$version" != "$GITHUB_REF_NAME" ]; then
@@ -30,6 +45,22 @@ jobs:
             echo "versions.json has no entry for $version" >&2
             exit 1
           }
+
+      # The candidate's tag must be the next version plus -rc.N, and must not
+      # be a version that is already released.
+      - name: Give the candidate its version
+        if: env.RC == 'true'
+        run: |
+          if ! [[ "$GITHUB_REF_NAME" =~ ^[0-9]+\.[0-9]+\.[0-9]+-rc\.[0-9]+$ ]]; then
+            echo "Tag $GITHUB_REF_NAME must look like 1.2.3-rc.1" >&2
+            exit 1
+          fi
+          jq -e --arg v "${GITHUB_REF_NAME%-rc.*}" 'has($v)' versions.json > /dev/null && {
+            echo "${GITHUB_REF_NAME%-rc.*} is already released: use the next version" >&2
+            exit 1
+          }
+          jq --arg v "$GITHUB_REF_NAME" '.version = $v' manifest.json > manifest.rc.json
+          mv manifest.rc.json manifest.json
 
       # Lets anyone check the release files came from this repo:
       # gh attestation verify main.js --repo nndrch/claudian-minimal
@@ -44,9 +75,20 @@ jobs:
       # The notes list the pull requests merged since the last release.
       # Edit them in the draft before publishing.
       - name: Create a draft release
+        if: env.RC != 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --draft \
+            --generate-notes \
+            main.js manifest.json styles.css
+
+      # Published at once (not a draft) so the files can be downloaded to test.
+      - name: Publish a pre-release
+        if: env.RC == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --prerelease \
             --generate-notes \
             main.js manifest.json styles.css
