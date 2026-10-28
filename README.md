@@ -2,7 +2,7 @@
 
 A quieter, minimal look for [Claudian](https://github.com/YishenTu/claudian), the Obsidian plugin that brings Claude Code and other coding agents into your vault.
 
-Claudian - Minimal is an independent companion plugin, not made by or affiliated with the Claudian author or with the Minimal theme. It needs Claudian installed and enabled.
+Claudian - Minimal is an independent companion plugin, not made by or affiliated with the Claudian author or with the Minimal theme. It needs Claudian installed and enabled; without Claudian it loads but changes nothing.
 
 ## What it changes
 
@@ -49,7 +49,7 @@ You type the sizes and limits in a box. Taller content scrolls inside its box, a
 
 ## Compatibility
 
-Needs Obsidian 1.13 or later. Tested with Claudian 2.3.33 on Obsidian 1.14.5. Desktop only, like Claudian.
+Needs Obsidian 1.13 or later. Tested with Claudian 2.3.35 on Obsidian 1.14.5. Desktop only, like Claudian.
 
 Claudian - Minimal works with Claudian's internal structure: its CSS classes, its tab manager and its tab bar. A Claudian update can change those. When that happens, the affected part stops working and Claudian keeps working as usual. Please [open an issue](https://github.com/nndrch/claudian-minimal/issues) with your Claudian version.
 
