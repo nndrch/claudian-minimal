@@ -59,7 +59,7 @@ Claudian - Minimal makes no network requests and collects no telemetry. It doesn
 
 ## Installation
 
-In Obsidian, open **Settings → Community plugins → Browse**, search for "Claudian - Minimal", then install and enable it.
+Install it from [Claudian - Minimal in Obsidian's plugin directory](https://obsidian.md/plugins?id=claudian-minimal). You can also open **Settings → Community plugins → Browse** in Obsidian, search for "Claudian - Minimal", then install and enable it.
 
 To install it manually, download `main.js`, `manifest.json` and `styles.css` from the [latest release](https://github.com/nndrch/claudian-minimal/releases/latest) into `<your vault>/.obsidian/plugins/claudian-minimal/`, then enable the plugin in **Settings → Community plugins**.
 
