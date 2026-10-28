@@ -1,0 +1,36 @@
+name: Release
+
+# Push a tag that matches the version in manifest.json (for example 1.0.0,
+# no "v") to create a draft release with the three plugin files.
+on:
+  push:
+    tags:
+      - "*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Check the tag matches manifest.json
+        run: |
+          version="$(jq -r .version manifest.json)"
+          if [ "$version" != "$GITHUB_REF_NAME" ]; then
+            echo "Tag $GITHUB_REF_NAME doesn't match manifest.json version $version" >&2
+            exit 1
+          fi
+          jq -e --arg v "$version" 'has($v)' versions.json > /dev/null || {
+            echo "versions.json has no entry for $version" >&2
+            exit 1
+          }
+
+      - name: Create a draft release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --draft \
+            main.js manifest.json styles.css

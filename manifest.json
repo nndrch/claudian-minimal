@@ -1,0 +1,10 @@
+{
+  "id": "claudian-minimal",
+  "name": "Claudian - Minimal",
+  "version": "1.0.0",
+  "minAppVersion": "1.13.0",
+  "description": "Gives Claudian a quieter, minimal look: adjustable accent color, text sizes and backgrounds, scrollable tables, expanded task notifications and tabs named after the linked note.",
+  "author": "Fernando Rocha",
+  "authorUrl": "https://github.com/nndrch",
+  "isDesktopOnly": true
+}

@@ -1,0 +1,500 @@
+/* ===========================================================
+   Claudian - Minimal — a quieter, minimal look for Claudian
+   Source: https://github.com/nndrch/claudian-minimal
+
+   Most of this file is always on. Some parts depend on settings:
+   - Switches put a class on <body>: cm-hide-welcome, cm-chat-font
+     and cm-wrap-code. Their rules start with body:where(.cm-…).
+   - Values arrive as CSS variables on <body>: --cm-accent and
+     --cm-accent-rgb (only for a custom accent), the text sizes,
+     --cm-line-height, --cm-message-gap, --cm-chat-font-family,
+     --cm-code-bg, --cm-bubble-bg and the --cm-max-… height limits.
+     Every var() below has a fallback that matches the default.
+
+   Specificity: every selector starts with "body" (:where() adds
+   nothing). Obsidian loads plugin CSS before the theme and the
+   snippets, in plugin load order, so Claudian's own styles can
+   end up after this file (for example when Claudian reloads after
+   an update). The extra type selector keeps these rules ahead of
+   same-specificity rules from Claudian and from the theme.
+
+   Editing: Obsidian reads this file when the plugin loads. After
+   a change, turn the plugin off and on again (or restart).
+   =========================================================== */
+
+/* ── Hide the logo/brand next to the "Claudian" title ──
+   Setting: Hide the welcome brand and greeting.
+   Note: up to v2.0.x Claudian used an SVG with class .claudian-logo.
+   From v2.0.41 on it became text ("Claudian") with the class
+   .claudian-welcome-brand. We keep both to cover both cases. */
+body:where(.cm-hide-welcome) .claudian-logo,
+body:where(.cm-hide-welcome) .claudian-welcome-brand {
+  display: none;
+}
+
+/* The welcome message ("You are absolutely right!") */
+body:where(.cm-hide-welcome) .claudian-welcome-greeting {
+  display: none;
+}
+
+/* ── Accent ──
+   Setting: Accent color. Claudian uses a fixed orange (#D97757).
+   By redefining the brand tokens, buttons, borders, logo and
+   highlights follow the theme accent, or the custom color when
+   one is set (--cm-accent).                                    */
+body .claudian-container {
+  --claudian-brand: var(--cm-accent, var(--interactive-accent));
+  --claudian-brand-claude: var(--cm-accent, var(--interactive-accent));
+  /* keep the subtle glow working even without the theme's -rgb */
+  --claudian-brand-rgb: var(--cm-accent-rgb, var(--interactive-accent-rgb, var(--claudian-brand-rgb)));
+  --claudian-brand-claude-rgb: var(--cm-accent-rgb, var(--interactive-accent-rgb, var(--claudian-brand-claude-rgb)));
+}
+
+/* ── Text size ──
+   Settings: Chat text size (14px) and Code text size (13px).
+   The body text inherits the container's base size.           */
+body .claudian-container {
+  font-size: var(--cm-chat-font-size, 14px);
+}
+
+body .claudian-message-content {
+  font-size: var(--cm-chat-font-size, 14px);
+}
+
+/* Inline code and code blocks. A px size, so code inside a block
+   isn't shrunk twice (the old 0.92em applied to both <pre> and
+   its <code>).                                                 */
+body .claudian-message-content code,
+body .claudian-message-content pre {
+  font-size: var(--cm-code-font-size, 13px);
+}
+
+/* ── Line height and space between messages ──
+   Settings: Line height (1.5) and Space between messages (12px),
+   the same values Claudian uses.                               */
+body .claudian-message-content {
+  line-height: var(--cm-line-height, 1.5);
+}
+
+body .claudian-messages {
+  gap: var(--cm-message-gap, 12px);
+}
+
+/* ── Chat font ──
+   Setting: Chat font. Only with the note or monospace font
+   (cm-chat-font on <body>); otherwise Claudian's font stays.
+   Code keeps the monospace font either way.                    */
+body:where(.cm-chat-font) .claudian-message-content {
+  font-family: var(--cm-chat-font-family);
+}
+
+body:where(.cm-chat-font) .claudian-message-content :is(code, pre) {
+  font-family: var(--font-monospace);
+}
+
+/* ── Code background (inline + blocks) ──
+   Setting: Code background (5% of the text color, the same tone
+   as the user bubble), instead of Claudian's own grays.
+   Claudian styles code with ".claudian-container …" and
+   "body.theme-light/dark …" selectors, so this rule carries the
+   theme class and the container to win. With only "body", as in
+   the old snippet, it never applied.                           */
+body:is(.theme-light, .theme-dark) .claudian-container .claudian-message-content pre,
+body:is(.theme-light, .theme-dark) .claudian-container .claudian-message-content :not(pre) > code {
+  background: color-mix(in srgb, var(--text-normal) var(--cm-code-bg, 5%), transparent);
+}
+
+/* ── Wrap long code lines ──
+   Setting: Wrap long code lines (off). Code blocks with a language
+   scroll sideways in Claudian; with cm-wrap-code on <body> their
+   lines wrap instead.                                          */
+body:where(.cm-wrap-code) .claudian-message-content pre,
+body:where(.cm-wrap-code) .claudian-message-content pre > code {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* ── Toggle switches (YOLO and the others) more visible ──
+   When active: solid track in the accent + white knob =
+   clear contrast in light and dark themes.                    */
+body .claudian-toggle-switch.active {
+  background: var(--cm-accent, var(--interactive-accent));
+}
+
+body .claudian-toggle-switch.active::after {
+  background: #ffffff;
+}
+
+/* ===========================================================
+   "Minimal / flat" style — bubbles + tool/thinking blocks
+   Goal: fewer borders/backgrounds, more breathing room, quieter.
+   =========================================================== */
+
+/* ── User bubble: subtle background + speech-bubble "tail" ──
+   Setting: Message bubble background (5% of the text color).
+   Replaces Claudian's fixed rgba(0,0,0,0.3) with a tone that
+   adapts to the theme. Rounded corners, but the bottom-right
+   corner stays sharp = speech-bubble look.
+   v2.3.6: the bubble moved to the child .claudian-message-content;
+   .claudian-message-user is now just the container (flex, no bg).
+   Styling the container created a double bubble.               */
+body .claudian-message-user > .claudian-message-content {
+  background: color-mix(in srgb, var(--text-normal) var(--cm-bubble-bg, 5%), transparent);
+  border-radius: 16px;
+  border-end-end-radius: 2px;   /* sharp corner (tail) */
+  padding: 14px 18px;
+}
+
+/* ── Assistant message: no highlight, full width ──
+   Already transparent in Claudian; here we just add breathing room. */
+body .claudian-message-assistant {
+  padding: 2px 0;
+}
+
+/* ── "thinking" and "tool" blocks: thinner, muted hairline ──
+   Claudian uses a 2px guide border. We tune it to 1px and
+   a more muted color = quieter context tree.                   */
+body .claudian-thinking-content,
+body .claudian-tool-content {
+  border-inline-start-width: 1px;
+  border-inline-start-color: color-mix(in srgb, var(--text-normal) 12%, transparent);
+  padding-inline-start: 14px;
+}
+
+/* ── "thinking" label: muted instead of accent ──
+   Less loud; lets the main text breathe.                       */
+body .claudian-thinking-label {
+  color: var(--text-muted);
+  font-weight: 400;
+}
+
+/* ── "thinking" text and the time: mono, small, no italics ──
+   Setting: Thinking and timing text size (12px).
+   Covers the live line ("Connecting dots… · 14s") and the collapsed
+   label ("Whipped up for 2m 36s"). Keeps color/pulse.
+   Note (v2.3.6): the old footer time log ("* Crafted for 33s" →
+   .claudian-baked-duration) was replaced by .claudian-response-throughput
+   ("12.3 tok/s"); the old class no longer exists in Claudian but
+   stays here at no cost, in case it comes back.                  */
+body .claudian-thinking,
+body .claudian-thinking-label,
+body .claudian-thinking-label-text,
+body .claudian-thinking-hint,
+body .claudian-thinking-current,
+body .claudian-baked-duration,
+body .claudian-response-throughput {
+  font-family: var(--font-monospace);
+  font-size: var(--cm-thinking-font-size, 12px);
+  font-style: normal;
+}
+
+/* ── Tool icon: muted instead of accent ──
+   More neutral/flat tool header.                               */
+body .claudian-tool-icon {
+  color: var(--text-muted);
+}
+
+/* ── Tool name: slightly muted tone ──                          */
+body .claudian-tool-name {
+  color: var(--text-muted);
+}
+
+/* ===========================================================
+   Horizontal containment — wide content scrolls within itself
+   Goal: never let tables, code blocks or long lines push the
+   chat width (global horizontal bar).
+   The message column stays locked at 100% and each element that
+   can grow gets ITS OWN overflow-x: auto.
+   =========================================================== */
+
+/* The message column never exceeds the available width.
+   min-width: 0 is essential: without it, a wide child forces the
+   flex item to grow instead of shrink.                          */
+body .claudian-message,
+body .claudian-message-content {
+  min-width: 0;
+  max-width: 100%;
+}
+
+/* Normal text: huge words/URLs break so they don't push the
+   chat (table cells ignore this — see the td rule).            */
+body .claudian-message-content {
+  overflow-wrap: anywhere;
+  word-break: normal;
+}
+
+/* Code blocks: their own horizontal scroll                     */
+body .claudian-message-content pre {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+/* ===========================================================
+   Tables — modern "borderless" look
+   Cells with a background; the rows use the chat background color
+   (--background-primary), so they read as clean gaps instead of
+   borders. Sharp corners.
+   =========================================================== */
+
+body .claudian-message-content table {
+  /* separate (not collapse) to allow rounded corners */
+  border-collapse: separate;
+  border-spacing: 0;
+  border: none;
+  background: transparent;
+  border-radius: 0;   /* sharp corners */
+}
+
+/* ── Mode WITH wrapper (added by main.js) ──
+   main.js wraps each table in a div.claudian-table-scroll.
+   The scroll lives on the wrapper; the table uses a REAL table
+   layout (not block), so the per-cell cap works and prose
+   wraps gracefully at ~60ch.                                    */
+body .claudian-table-scroll {
+  max-width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  /* Small inset on the right so tables don't touch the panel edge.
+     Adjust the 8px to taste.                                    */
+  margin-inline-end: 8px;
+}
+
+body .claudian-table-scroll > table {
+  display: table;
+  /* Natural width (max-content), BUT capped at 150% of the panel.
+     Blink ignores per-cell max-width when sizing columns, but it
+     respects the TABLE's max-width: when capped, the auto-layout
+     algorithm distributes the deficit intelligently — short columns
+     keep their content size and prose columns absorb the difference
+     and wrap over multiple lines. Whatever exceeds 100% of the
+     panel scrolls in the wrapper.
+     Adjust the 150% to control how much prose wraps:
+     larger = longer lines + more scroll.
+     min-width: 100% makes small tables always fill the panel width
+     (columns stretch to fill the space), while wide tables keep the
+     max-content/150% logic.                                     */
+  width: max-content;
+  min-width: 100%;
+  max-width: 150%;
+}
+
+/* Per-cell width floor: keeps columns from getting so narrow that
+   short text (e.g. "Jul 19") wraps onto two lines. Prose columns
+   can still grow wider than this.                              */
+body .claudian-table-scroll :is(th, td) {
+  min-width: 5em;
+}
+
+body .claudian-table-scroll th {
+  white-space: nowrap;  /* headers on a single line */
+}
+
+body .claudian-table-scroll td {
+  white-space: normal;
+  overflow-wrap: normal;  /* break ONLY at spaces, never mid-word */
+  word-break: normal;
+}
+
+/* ── FALLBACK without wrapper (if the wrapper in main.js stops working) ──
+   The "bare" table returns to scroll-box mode with cells on a single
+   line. Degrades gracefully until the wrapper is back.          */
+body .claudian-message-content table:not(.claudian-table-scroll > table) {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+body .claudian-message-content table:not(.claudian-table-scroll > table) :is(th, td) {
+  white-space: nowrap;
+}
+
+/* Each cell with a subtle gray background, a bit darker than
+   the bubble (5%). The rows use the chat background color, so
+   they read as clean gaps between cells.                       */
+body .claudian-message-content th,
+body .claudian-message-content td {
+  background: color-mix(in srgb, var(--text-normal) 8%, transparent);
+  border: none;
+  border-bottom: 2px solid var(--background-primary);
+  border-inline-end: 2px solid var(--background-primary);
+}
+
+/* No stray line along the outer edges                          */
+body .claudian-message-content th:last-child,
+body .claudian-message-content td:last-child {
+  border-inline-end: none;
+}
+body .claudian-message-content tr:last-child td {
+  border-bottom: none;
+}
+
+/* Header a bit stronger than the other cells                   */
+body .claudian-message-content th {
+  background: color-mix(in srgb, var(--text-normal) 13%, transparent);
+}
+
+/* Subtle row hover                                             */
+body .claudian-message-content tr:hover td {
+  background: color-mix(in srgb, var(--text-normal) 11%, transparent);
+}
+
+/* ── Task notification: always expanded ──
+   Claudian creates the block collapsed (hidden attribute) and
+   has no setting for it (v2.3.33, renderTaskNotification). This
+   overrides Claudian's .claudian-work-history[hidden]
+   { display: none }. The "Task notification" button stays,
+   with no effect.
+   Since v2.3.33 the text is only rendered (Markdown) on the first
+   click on the header; main.js makes that click by itself. If that
+   stops working, the raw text shows: the pre-wrap below at least
+   keeps its line breaks.                                         */
+body .claudian-task-notification .claudian-work-history[hidden] {
+  display: block;
+}
+
+body .claudian-task-notification > .claudian-work-history > div:not(:has(*)) {
+  white-space: pre-wrap;
+}
+
+/* ── Task notification inside a collapsed "Worked for…" group ──
+   Since v2.3.33, notifications that arrive mid-response are folded
+   into the "Worked for…" group (they used to stay outside). While
+   the group is collapsed, show the group but hide everything except
+   the notification(s). Expanding the group shows the rest as usual. */
+body .claudian-work-history[hidden]:has(.claudian-task-notification) {
+  display: block;
+  border-inline-start: none;
+  padding-inline-start: 0;
+}
+
+body .claudian-work-history[hidden]:has(.claudian-task-notification) :not(.claudian-task-notification, .claudian-task-notification *):not(:has(.claudian-task-notification)) {
+  display: none;
+}
+
+/* ── AskUserQuestion: option and review text wraps ──
+   The options and review rows are <button>s, and Obsidian gives every
+   button white-space: nowrap, which the label and description inherit.
+   Claudian's own reset doesn't undo it, so long text stayed on one
+   line and got cut off at the panel edge.
+   Left out on purpose: the action buttons (Cancel / Submit answers),
+   which stay on one line, and the tabs (.claudian-ask-tab), which use
+   an ellipsis by design.                                          */
+body button.claudian-ask-item:not(.claudian-ask-action),
+body button.claudian-ask-review-pair {
+  white-space: normal;
+}
+
+/* The question and the review question also break paths/URLs that
+   have no spaces (Claudian only does this on the options and the
+   answer).                                                        */
+body .claudian-ask-question-text,
+body .claudian-ask-review-q-text {
+  overflow-wrap: anywhere;
+}
+
+/* ── Tabs: more visible states ──
+   Claudian only tells the states apart by the border color (2px).
+   - Current tab: soft fill in the accent (18%), accent border
+     and bold text in a darkened accent (~6:1 contrast).
+   - Other tabs with a state: a colored dot before the name, and
+     normal text color instead of muted. Running = dark, needs you
+     = orange, done = green, error = red. Idle tabs stay as they are.
+   - The dot pulses on running tabs and tabs that need you (off when
+     the system asks for reduced motion).
+   - Number-mode tabs (24px) widen to fit the dot.
+   The .claudian-tab-badges prefix beats Claudian's
+   body.theme-light …-streaming { border-color: #000 }.           */
+body .claudian-tab-badges > button.claudian-tab-badge.claudian-tab-badge-active {
+  background: color-mix(in srgb, var(--cm-accent, var(--interactive-accent)) 18%, var(--background-primary));
+  border-color: var(--cm-accent, var(--interactive-accent));
+  color: color-mix(in srgb, var(--cm-accent, var(--interactive-accent)) 55%, var(--text-normal));
+  font-weight: 600;
+}
+
+body .claudian-tab-badges > button.claudian-tab-badge.claudian-tab-badge-active:is(:hover, :active) {
+  background: color-mix(in srgb, var(--cm-accent, var(--interactive-accent)) 28%, var(--background-primary));
+  border-color: var(--cm-accent, var(--interactive-accent));
+  color: color-mix(in srgb, var(--cm-accent, var(--interactive-accent)) 55%, var(--text-normal));
+}
+
+body .claudian-tab-badges > .claudian-tab-badge-streaming { --cm-tab-dot: var(--text-normal); }
+body .claudian-tab-badges > .claudian-tab-badge-action-required { --cm-tab-dot: var(--color-orange); }
+body .claudian-tab-badges > .claudian-tab-badge-review { --cm-tab-dot: var(--color-green); }
+body .claudian-tab-badges > .claudian-tab-badge-review-error { --cm-tab-dot: var(--text-error); }
+
+body .claudian-tab-badges > button.claudian-tab-badge:is(.claudian-tab-badge-streaming, .claudian-tab-badge-action-required, .claudian-tab-badge-review, .claudian-tab-badge-review-error) {
+  gap: 6px;
+  border-color: var(--background-modifier-border);
+  color: var(--text-normal);
+}
+
+body .claudian-tab-badges > button.claudian-tab-badge:is(.claudian-tab-badge-streaming, .claudian-tab-badge-action-required, .claudian-tab-badge-review, .claudian-tab-badge-review-error)::before {
+  content: "";
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--cm-tab-dot);
+}
+
+body .claudian-tab-badges > button.claudian-tab-badge:is(.claudian-tab-badge-streaming, .claudian-tab-badge-action-required, .claudian-tab-badge-review, .claudian-tab-badge-review-error):not(.claudian-tab-badge-expanded) {
+  flex: 0 0 auto;
+  width: auto;
+  padding: 0 6px;
+}
+
+@keyframes cm-tab-dot-pulse {
+  50% { opacity: 0.25; }
+}
+
+body .claudian-tab-badges > button.claudian-tab-badge:is(.claudian-tab-badge-streaming, .claudian-tab-badge-action-required)::before {
+  animation: cm-tab-dot-pulse 1.6s ease-in-out infinite;
+}
+
+/* Same selector as the animation rule above, so this one wins
+   (a shorter selector would lose to it on specificity).          */
+@media (prefers-reduced-motion: reduce) {
+  body .claudian-tab-badges > button.claudian-tab-badge:is(.claudian-tab-badge-streaming, .claudian-tab-badge-action-required)::before {
+    animation: none;
+  }
+}
+
+/* ===========================================================
+   Height limits
+   Settings: Tool code and output, File edit diffs, Thinking,
+   Subagent result and Images in tool results. Taller content
+   scrolls inside its box; "none" (setting 0) removes the limit.
+   The fallbacks are Claudian's own values.
+   =========================================================== */
+body .claudian-tool-content .claudian-tool-script-code,
+body .claudian-tool-content .claudian-tool-script-output {
+  max-height: var(--cm-max-tool-output, 300px);
+}
+
+body .claudian-write-edit-diff {
+  max-height: var(--cm-max-edit-diff, 300px);
+}
+
+body .claudian-thinking-content {
+  max-height: var(--cm-max-thinking, 400px);
+}
+
+body .claudian-subagent-result-output {
+  max-height: var(--cm-max-subagent-result, 220px);
+}
+
+body .claudian-tool-result-image {
+  max-height: var(--cm-max-tool-image, 320px);
+}
+
+/* ── Settings tab: the number boxes ──                         */
+body .cm-number-input {
+  width: 5em;
+  text-align: end;
+}
+
+body .cm-number-unit {
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+}
