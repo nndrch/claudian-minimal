@@ -31,7 +31,9 @@
    Claudian keeps working. */
 'use strict';
 
-const { Plugin, PluginSettingTab, Setting, TFile } = require('obsidian');
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- Obsidian loads main.js as CommonJS, and this plugin has no build step.
+const obsidian = require('obsidian');
+const { PluginSettingTab, TFile } = obsidian;
 
 const VIEW_TYPE = 'claudian-view';
 const TABLE_WRAP = 'claudian-table-scroll';
@@ -226,7 +228,12 @@ const SLIDERS = [
   },
 ];
 
-function cssVars(s) {
+const hexToRgb = (hex) => {
+  const n = parseInt(hex.slice(1), 16);
+  return `${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}`;
+};
+
+const cssVars = (s) => {
   const custom = s.accentMode === 'custom' && HEX_COLOR.test(s.accentColor);
   const px = (v) => `${v}px`;
   const limit = (v) => (v > 0 ? `${v}px` : 'none');
@@ -248,42 +255,37 @@ function cssVars(s) {
     '--cm-accent': custom ? s.accentColor : '',
     '--cm-accent-rgb': custom ? hexToRgb(s.accentColor) : '',
   };
-}
+};
 
-function bodyClasses(s) {
+const bodyClasses = (s) => {
   return {
     'cm-hide-welcome': s.hideWelcome,
     'cm-chat-font': s.chatFont !== 'interface',
     'cm-wrap-code': s.wrapCode,
   };
-}
+};
 
 const CSS_VARS = Object.keys(cssVars(DEFAULTS));
 const BODY_CLASSES = Object.keys(bodyClasses(DEFAULTS));
 
-function hexToRgb(hex) {
-  const n = parseInt(hex.slice(1), 16);
-  return `${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}`;
-}
-
 // A number typed in a box, within the box's range and rounded to its
 // decimals. Returns null for anything else, so the box keeps its last
 // good value.
-function parseNumber(def, value) {
+const parseNumber = (def, value) => {
   const text = String(value).replace(',', '.').trim();
   if (text === '') return null;
   const n = Number(text);
   if (!Number.isFinite(n) || n < def.min || n > def.max) return null;
   const f = 10 ** def.decimals;
   return Math.round(n * f) / f;
-}
+};
 
-function formatNumber(def, v) {
+const formatNumber = (def, v) => {
   return def.unit ? `${v} ${def.unit}` : String(v);
-}
+};
 
 // Keeps only known settings with the right type, and clamps numbers.
-function sanitize(raw) {
+const sanitize = (raw) => {
   const out = {};
   if (!raw || typeof raw !== 'object') return out;
   for (const key of Object.keys(DEFAULTS)) {
@@ -306,7 +308,7 @@ function sanitize(raw) {
     }
   }
   return out;
-}
+};
 
 class ClaudianMinimalSettingTab extends PluginSettingTab {
   constructor(app, plugin) {
@@ -314,139 +316,150 @@ class ClaudianMinimalSettingTab extends PluginSettingTab {
     this.plugin = plugin;
   }
 
-  display() {
-    const { containerEl } = this;
+  // Declarative settings (Obsidian 1.13+): Obsidian renders them and indexes
+  // them for its settings search. Values go through getControlValue and
+  // setControlValue, which use the plugin's own storage. Number boxes and
+  // sliders render their own row, to keep their restore-default buttons.
+  getSettingDefinitions() {
     const p = this.plugin;
-    containerEl.empty();
+    const toggle = (key, name, desc) => ({ name, desc, control: { type: 'toggle', key } });
+    const fontOptions = {};
+    for (const [key, font] of Object.entries(FONTS)) fontOptions[key] = font.label;
+    return [
+      toggle(
+        'tabNames',
+        'Name tabs after the linked note',
+        "Show the linked note's name on each chat tab instead of a number. A manual rename wins until the tab starts a new conversation."
+      ),
+      toggle('hideWelcome', 'Hide the welcome brand and greeting', 'Hide the Claudian name and the greeting on the empty chat screen.'),
+      {
+        type: 'group',
+        heading: 'Open by default',
+        items: [
+          {
+            name: 'Only in the newest reply',
+            desc: 'These blocks open by themselves in the newest reply of each chat and close again when a newer reply starts. A block you close yourself stays closed.',
+          },
+          ...OPEN_TYPES.map((t) => toggle(t.key, t.name, t.desc)),
+        ],
+      },
+      {
+        type: 'group',
+        heading: 'Appearance',
+        items: [
+          {
+            name: 'Accent color',
+            desc: 'Used for buttons, highlights, active toggles and the current tab.',
+            control: { type: 'dropdown', key: 'accentMode', options: { theme: 'Theme accent', custom: 'Custom color' } },
+          },
+          {
+            name: 'Custom accent color',
+            desc: 'The color to use instead of the theme accent.',
+            visible: () => p.settings.accentMode === 'custom',
+            control: { type: 'color', key: 'accentColor' },
+          },
+          {
+            name: 'Chat font',
+            desc: 'Font for the messages. Code stays monospace.',
+            control: { type: 'dropdown', key: 'chatFont', options: fontOptions },
+          },
+          ...NUMBERS.filter((x) => x.group === 'appearance').map((def) => this.numberRow(def)),
+          toggle('wrapCode', 'Wrap long code lines', 'Long lines in code blocks wrap instead of scrolling sideways.'),
+          ...SLIDERS.map((def) => this.sliderRow(def)),
+        ],
+      },
+      {
+        type: 'group',
+        heading: 'Height limits',
+        items: [
+          { name: 'How the limits work', desc: 'Taller content scrolls inside its box. A limit of 0 removes it.' },
+          ...NUMBERS.filter((x) => x.group === 'heights').map((def) => this.numberRow(def)),
+        ],
+      },
+    ];
+  }
 
-    this.addToggle(
-      'tabNames',
-      'Name tabs after the linked note',
-      "Show the linked note's name on each chat tab instead of a number. A manual rename wins until the tab starts a new conversation."
-    );
-    this.addToggle('hideWelcome', 'Hide the welcome brand and greeting', 'Hide the Claudian name and the greeting on the empty chat screen.');
+  getControlValue(key) {
+    return this.plugin.settings[key];
+  }
 
-    new Setting(containerEl)
-      .setName('Open by default')
-      .setDesc('In the newest reply of each chat. Blocks opened this way close again when a newer reply starts.')
-      .setHeading();
-    for (const t of OPEN_TYPES) this.addToggle(t.key, t.name, t.desc);
-
-    new Setting(containerEl).setName('Appearance').setHeading();
-
-    const accent = new Setting(containerEl)
-      .setName('Accent color')
-      .setDesc('Used for buttons, highlights, active toggles and the current tab.')
-      .addDropdown((d) =>
-        d
-          .addOption('theme', 'Theme accent')
-          .addOption('custom', 'Custom color')
-          .setValue(p.settings.accentMode)
-          .onChange(async (v) => {
-            await p.update({ accentMode: v });
-            this.display();
-          })
-      );
-    if (p.settings.accentMode === 'custom') {
-      accent.addColorPicker((c) =>
-        c.setValue(p.settings.accentColor).onChange((v) => {
-          if (HEX_COLOR.test(v)) p.update({ accentColor: v.toLowerCase() });
-        })
-      );
+  async setControlValue(key, value) {
+    if (key === 'accentColor') {
+      if (!HEX_COLOR.test(String(value))) return;
+      value = String(value).toLowerCase();
     }
-
-    new Setting(containerEl)
-      .setName('Chat font')
-      .setDesc('Font for the messages. Code stays monospace.')
-      .addDropdown((d) => {
-        for (const [key, font] of Object.entries(FONTS)) d.addOption(key, font.label);
-        d.setValue(p.settings.chatFont).onChange((v) => p.update({ chatFont: v }));
-      });
-
-    for (const def of NUMBERS.filter((x) => x.group === 'appearance')) this.addNumber(def);
-    this.addToggle('wrapCode', 'Wrap long code lines', 'Long lines in code blocks wrap instead of scrolling sideways.');
-    for (const def of SLIDERS) this.addSlider(def);
-
-    new Setting(containerEl)
-      .setName('Height limits')
-      .setDesc('Taller content scrolls inside its box. 0 means no limit.')
-      .setHeading();
-    for (const def of NUMBERS.filter((x) => x.group === 'heights')) this.addNumber(def);
+    await this.plugin.update({ [key]: value });
+    // The custom color row only shows for a custom accent.
+    if (key === 'accentMode') this.refreshDomState();
   }
 
-  addToggle(key, name, desc) {
+  // A number box with its unit, and a button that restores the plugin default.
+  numberRow(def) {
     const p = this.plugin;
-    new Setting(this.containerEl)
-      .setName(name)
-      .setDesc(desc)
-      .addToggle((t) => t.setValue(p.settings[key]).onChange((v) => p.update({ [key]: v })));
-  }
-
-  // A number box, with a button that restores the plugin default.
-  addNumber(def) {
-    const p = this.plugin;
-    const setting = new Setting(this.containerEl)
-      .setName(def.name)
-      .setDesc(`${def.desc} Default ${formatNumber(def, DEFAULTS[def.key])}.`);
-    let box = null;
-    setting.addText((t) => {
-      box = t;
-      t.inputEl.type = 'number';
-      t.inputEl.min = String(def.min);
-      t.inputEl.max = String(def.max);
-      t.inputEl.step = 'any';
-      t.inputEl.addClass('cm-number-input');
-      t.setValue(String(p.settings[def.key]));
-      t.onChange((value) => {
-        const n = parseNumber(def, value);
-        if (n !== null) p.update({ [def.key]: n });
-      });
-      // Leaving the box with an empty or out-of-range value shows the value in use again.
-      t.inputEl.addEventListener('blur', () => t.setValue(String(p.settings[def.key])));
-    });
-    if (def.unit) setting.controlEl.createSpan({ text: def.unit, cls: 'cm-number-unit' });
-    setting.addExtraButton((b) =>
-      b
-        .setIcon('rotate-ccw')
-        .setTooltip('Restore default')
-        .onClick(async () => {
-          await p.update({ [def.key]: DEFAULTS[def.key] });
-          if (box) box.setValue(String(DEFAULTS[def.key]));
-        })
-    );
-  }
-
-  addSlider(def) {
-    const p = this.plugin;
-    const setting = new Setting(this.containerEl).setName(def.name);
-    const describe = () =>
-      setting.setDesc(`${def.desc} Now ${p.settings[def.key]}${def.unit}, default ${DEFAULTS[def.key]}${def.unit}.`);
-    let slider = null;
-    setting.addSlider((s) => {
-      slider = s;
-      s.setLimits(def.min, def.max, 1)
-        .setValue(p.settings[def.key])
-        .setDynamicTooltip()
-        .onChange(async (v) => {
-          await p.update({ [def.key]: v });
-          describe();
+    return {
+      name: def.name,
+      desc: `${def.desc} Default ${formatNumber(def, DEFAULTS[def.key])}.`,
+      render: (setting) => {
+        let box = null;
+        setting.addText((t) => {
+          box = t;
+          t.inputEl.type = 'number';
+          t.inputEl.min = String(def.min);
+          t.inputEl.max = String(def.max);
+          t.inputEl.step = 'any';
+          t.inputEl.addClass('cm-number-input');
+          t.setValue(String(p.settings[def.key]));
+          t.onChange((value) => {
+            const n = parseNumber(def, value);
+            if (n !== null) p.update({ [def.key]: n });
+          });
+          // Leaving the box with an empty or out-of-range value shows the value in use again.
+          t.inputEl.addEventListener('blur', () => t.setValue(String(p.settings[def.key])));
         });
-    });
-    setting.addExtraButton((b) =>
-      b
-        .setIcon('rotate-ccw')
-        .setTooltip('Restore default')
-        .onClick(async () => {
-          await p.update({ [def.key]: DEFAULTS[def.key] });
-          if (slider) slider.setValue(DEFAULTS[def.key]);
-          describe();
-        })
-    );
-    describe();
+        if (def.unit) setting.controlEl.createSpan({ text: def.unit, cls: 'cm-number-unit' });
+        setting.addExtraButton((b) =>
+          b
+            .setIcon('rotate-ccw')
+            .setTooltip('Restore default')
+            .onClick(async () => {
+              await p.update({ [def.key]: DEFAULTS[def.key] });
+              if (box) box.setValue(String(DEFAULTS[def.key]));
+            })
+        );
+      },
+    };
+  }
+
+  // A slider, with a button that restores the plugin default.
+  sliderRow(def) {
+    const p = this.plugin;
+    return {
+      name: def.name,
+      desc: `${def.desc} Default ${DEFAULTS[def.key]}${def.unit}.`,
+      render: (setting) => {
+        let slider = null;
+        setting.addSlider((s) => {
+          slider = s;
+          s.setLimits(def.min, def.max, 1)
+            .setValue(p.settings[def.key])
+            .setDynamicTooltip()
+            .onChange((v) => p.update({ [def.key]: v }));
+        });
+        setting.addExtraButton((b) =>
+          b
+            .setIcon('rotate-ccw')
+            .setTooltip('Restore default')
+            .onClick(async () => {
+              await p.update({ [def.key]: DEFAULTS[def.key] });
+              if (slider) slider.setValue(DEFAULTS[def.key]);
+            })
+        );
+      },
+    };
   }
 }
 
-module.exports = class ClaudianMinimalPlugin extends Plugin {
+module.exports = class ClaudianMinimalPlugin extends obsidian.Plugin {
   async onload() {
     const saved = (await this.loadData()) || {};
     this.settings = Object.assign({}, DEFAULTS, sanitize(saved.settings));
@@ -618,14 +631,13 @@ module.exports = class ClaudianMinimalPlugin extends Plugin {
   hook(view) {
     const tm = view.tabManager;
     if (this.hookedManagers.has(tm) || typeof tm.getTabBarItems !== 'function') return;
-    const plugin = this;
     const original = tm.getTabBarItems;
-    tm.getTabBarItems = function (...args) {
-      const items = original.apply(this, args);
+    tm.getTabBarItems = (...args) => {
+      const items = original.apply(tm, args);
       try {
-        return plugin.decorate(view, items);
+        return this.decorate(view, items);
       } catch (e) {
-        plugin.warn('decorate', e);
+        this.warn('decorate', e);
         return items;
       }
     };
@@ -638,7 +650,7 @@ module.exports = class ClaudianMinimalPlugin extends Plugin {
     for (const tm of this.hookedManagers) {
       try {
         delete tm.getTabBarItems;
-      } catch (e) {
+      } catch {
         /* ignore */
       }
     }
@@ -647,13 +659,13 @@ module.exports = class ClaudianMinimalPlugin extends Plugin {
     let views = [];
     try {
       views = this.views();
-    } catch (e) {
+    } catch {
       /* ignore */
     }
     for (const view of views) {
       try {
         view.updateTabBar();
-      } catch (e) {
+      } catch {
         /* ignore */
       }
     }
@@ -893,7 +905,7 @@ module.exports = class ClaudianMinimalPlugin extends Plugin {
   }
 };
 
-function convCreatedAt(id) {
+const convCreatedAt = (id) => {
   const m = /^conv-(\d+)-/.exec(id || '');
   return m ? Number(m[1]) : 0;
-}
+};
