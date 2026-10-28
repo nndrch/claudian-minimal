@@ -21,6 +21,8 @@ Claudian - Minimal is an independent companion plugin, not made by or affiliated
 | Setting | Default |
 |---|---|
 | Name tabs after the linked note | On |
+| Open the linked note when switching tabs | Off |
+| Open a Claudian tab when opening a note | Off |
 | Hide the welcome brand and greeting | On |
 | **Open by default** | |
 | Tool calls | On |
@@ -70,6 +72,8 @@ To install it manually, download `main.js`, `manifest.json` and `styles.css` fro
 - **Task notifications:** Claudian renders a notification's text when its header is first clicked. The plugin clicks each new header once, without bubbling.
 - **Open by default:** Claudian builds a block's content on its first click too, so the plugin clicks each closed header once, only in the newest reply of each chat. A block you close yourself stays closed, and blocks the plugin opened close again when a newer reply starts.
 - **Tab names:** the plugin wraps the method Claudian uses to build the tab bar, and replaces each tab's title with the name of its linked note.
+- **Open the note on tab switch:** the plugin wraps the tab manager's `switchToTab`. After you switch tabs in the chat, it shows the tab's linked note: a leaf that already shows it is brought forward, otherwise it opens in the most recent main-area leaf. Focus stays in the chat. It only reacts to switches you make with the Claudian view active.
+- **Tabs follow the notes:** when you open a note or canvas, the plugin switches to the Claudian tab linked to it. With no such tab, and once the note has stayed active for 1.5 seconds, it creates a tab: with the latest conversation linked to the note if there is one, otherwise a new empty one. Notes that are already open get their tabs too, once Claudian's tabs have settled after startup. Closing a note closes its tab, except one that is working or the last one left; the conversation stays in the history. While this setting is on, an empty tab keeps the note it was linked to instead of following whichever note is active. Together with the setting above, tabs and notes mirror each other.
 - **Settings:** built with Obsidian's declarative settings API, so Obsidian renders them and indexes them for its settings search. The number boxes and sliders render their own rows, to keep their restore-default buttons.
 
 ## Development
@@ -81,6 +85,14 @@ There is no build step: `main.js` and `styles.css` are the source.
 ```
 
 Then turn the plugin off and on in Obsidian to load the new files.
+
+To test a change before it's released, work on a branch and install it with `--dev`. Settings → Community plugins then shows the version with `-dev` after it, and the repo's `manifest.json` stays as it is:
+
+```bash
+./install.sh --dev "/path/to/your/vault"
+```
+
+To test the exact release files, or to test on another machine, push a release candidate tag, for example `git tag 1.1.0-rc.1 && git push origin 1.1.0-rc.1`. The GitHub Action builds the files with that version and publishes a pre-release. A pre-release is never the "latest" release, so Obsidian's directory doesn't offer it to anyone. Install it by hand from the pre-release's assets, as in *Installation* but from that release's page. Don't bump the version on `main` for a candidate: bump it only for the real release.
 
 To release a new version:
 
