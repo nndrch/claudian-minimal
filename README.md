@@ -45,11 +45,11 @@ Claudian - Minimal is an independent companion plugin, not made by or affiliated
 | Subagent result | 220 px |
 | Images in tool results | 320 px |
 
-You type the sizes and limits in a box. Taller content scrolls inside its box, and a height limit of 0 removes it. The two backgrounds are a share of the text color, so they adapt to light and dark themes. Every value has a button that restores the plugin's default.
+You type the sizes and limits in a box. Taller content scrolls inside its box, and a height limit of 0 removes it. The two backgrounds are a share of the text color, so they adapt to light and dark themes. Every value has a button that restores the plugin's default. All the settings show up in Obsidian's settings search.
 
 ## Compatibility
 
-Tested with Claudian 2.3.33 on Obsidian 1.14.5. Desktop only, like Claudian.
+Needs Obsidian 1.13 or later. Tested with Claudian 2.3.33 on Obsidian 1.14.5. Desktop only, like Claudian.
 
 Claudian - Minimal works with Claudian's internal structure: its CSS classes, its tab manager and its tab bar. A Claudian update can change those. When that happens, the affected part stops working and Claudian keeps working as usual. Please [open an issue](https://github.com/nndrch/claudian-minimal/issues) with your Claudian version.
 
@@ -70,6 +70,7 @@ To install it manually, download `main.js`, `manifest.json` and `styles.css` fro
 - **Task notifications:** Claudian renders a notification's text when its header is first clicked. The plugin clicks each new header once, without bubbling.
 - **Open by default:** Claudian builds a block's content on its first click too, so the plugin clicks each closed header once, only in the newest reply of each chat. A block you close yourself stays closed, and blocks the plugin opened close again when a newer reply starts.
 - **Tab names:** the plugin wraps the method Claudian uses to build the tab bar, and replaces each tab's title with the name of its linked note.
+- **Settings:** built with Obsidian's declarative settings API, so Obsidian renders them and indexes them for its settings search. The number boxes and sliders render their own rows, to keep their restore-default buttons.
 
 ## Development
 
