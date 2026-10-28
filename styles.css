@@ -348,12 +348,13 @@ body .claudian-message-content tr:hover td {
    Since v2.3.33 the text is only rendered (Markdown) on the first
    click on the header; main.js makes that click by itself. If that
    stops working, the raw text shows: the pre-wrap below at least
-   keeps its line breaks.                                         */
+   keeps its line breaks. main.js marks the raw text .cm-raw-text
+   (Obsidian's review flags the CSS has() selector as slow).    */
 body .claudian-task-notification .claudian-work-history[hidden] {
   display: block;
 }
 
-body .claudian-task-notification > .claudian-work-history > div:not(:has(*)) {
+body .claudian-task-notification > .claudian-work-history > div.cm-raw-text {
   white-space: pre-wrap;
 }
 
@@ -361,14 +362,16 @@ body .claudian-task-notification > .claudian-work-history > div:not(:has(*)) {
    Since v2.3.33, notifications that arrive mid-response are folded
    into the "Worked for…" group (they used to stay outside). While
    the group is collapsed, show the group but hide everything except
-   the notification(s). Expanding the group shows the rest as usual. */
-body .claudian-work-history[hidden]:has(.claudian-task-notification) {
+   the notification(s). Expanding the group shows the rest as usual.
+   main.js marks groups that hold a notification .cm-holds-notification,
+   and every element on the way down to it .cm-notification-path.  */
+body .claudian-work-history.cm-holds-notification[hidden] {
   display: block;
   border-inline-start: none;
   padding-inline-start: 0;
 }
 
-body .claudian-work-history[hidden]:has(.claudian-task-notification) :not(.claudian-task-notification, .claudian-task-notification *):not(:has(.claudian-task-notification)) {
+body .claudian-work-history.cm-holds-notification[hidden] :not(.claudian-task-notification, .claudian-task-notification *):not(.cm-notification-path) {
   display: none;
 }
 
