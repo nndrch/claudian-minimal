@@ -39,6 +39,12 @@ const VIEW_TYPE = 'claudian-view';
 const TABLE_WRAP = 'claudian-table-scroll';
 const TABLE_SEL = '.claudian-message-content table';
 const NOTIF_SEL = '.claudian-task-notification > .claudian-work-header[aria-expanded="false"]';
+const NOTIF_CLASS = 'claudian-task-notification';
+const WORK_HISTORY_CLASS = 'claudian-work-history';
+// Markers that stand in for CSS has() selectors (see markNotification).
+const RAW_TEXT = 'cm-raw-text';
+const NOTIF_PATH = 'cm-notification-path';
+const HOLDS_NOTIF = 'cm-holds-notification';
 const ASSISTANT_CLASS = 'claudian-message-assistant';
 const POLL_MS = 1500;
 const PRUNE_GRACE_MS = 60000;
@@ -97,7 +103,7 @@ const OPEN_TYPES = [
   },
 ];
 
-const SWEEP_SEL = [TABLE_SEL, NOTIF_SEL, ...OPEN_TYPES.map((t) => t.sel)].join(', ');
+const SWEEP_SEL = [TABLE_SEL, NOTIF_SEL, `.${NOTIF_CLASS}`, ...OPEN_TYPES.map((t) => t.sel)].join(', ');
 
 const FONTS = {
   interface: { label: 'Interface font', value: '' },
@@ -478,7 +484,12 @@ module.exports = class ClaudianMinimalPlugin extends obsidian.Plugin {
     this.registerEvent(this.app.workspace.on('window-open', (win) => this.applyStyles(win.doc)));
 
     this.observer = new MutationObserver((mutations) => {
-      for (const m of mutations) for (const node of m.addedNodes) this.sweep(node);
+      for (const m of mutations) {
+        // A notification body stops being raw text once its Markdown renders.
+        const t = m.target;
+        if (t.classList && t.classList.contains(RAW_TEXT) && t.firstElementChild) t.classList.remove(RAW_TEXT);
+        for (const node of m.addedNodes) this.sweep(node);
+      }
     });
     this.observer.observe(document.body, { childList: true, subtree: true });
     this.sweep(document.body);
@@ -501,6 +512,9 @@ module.exports = class ClaudianMinimalPlugin extends obsidian.Plugin {
     const clear = {};
     for (const name of CSS_VARS) clear[name] = '';
     for (const doc of this.documents()) {
+      for (const el of doc.querySelectorAll(`.${RAW_TEXT}, .${NOTIF_PATH}`)) {
+        el.classList.remove(RAW_TEXT, NOTIF_PATH, HOLDS_NOTIF);
+      }
       for (const cls of BODY_CLASSES) doc.body.classList.remove(cls);
       this.setVars(doc.body, clear);
     }
@@ -817,6 +831,7 @@ module.exports = class ClaudianMinimalPlugin extends obsidian.Plugin {
   handle(el) {
     if (el.tagName === 'TABLE') this.wrapTable(el);
     else if (el.matches(NOTIF_SEL)) this.openNotification(el);
+    else if (el.classList.contains(NOTIF_CLASS)) this.markNotification(el);
     else this.autoOpen(el);
   }
 
@@ -827,6 +842,23 @@ module.exports = class ClaudianMinimalPlugin extends obsidian.Plugin {
     wrap.className = TABLE_WRAP;
     parent.insertBefore(wrap, table);
     wrap.appendChild(table);
+  }
+
+  // Marks what styles.css would otherwise find with the CSS has() selector,
+  // which Obsidian's review flags as slow: the notification's text while
+  // it's still raw, and every element between the notification and its
+  // reply, with the "Worked for…" groups among them. Runs again when
+  // Claudian moves the notification into a group.
+  markNotification(wrapper) {
+    for (const body of wrapper.querySelectorAll(`:scope > .${WORK_HISTORY_CLASS} > div`)) {
+      if (!body.firstElementChild) body.classList.add(RAW_TEXT);
+    }
+    const stop = wrapper.ownerDocument.body;
+    for (let el = wrapper.parentElement; el && el !== stop; el = el.parentElement) {
+      if (el.classList.contains(ASSISTANT_CLASS)) break;
+      el.classList.add(NOTIF_PATH);
+      if (el.classList.contains(WORK_HISTORY_CLASS)) el.classList.add(HOLDS_NOTIF);
+    }
   }
 
   // Claudian renders the notification text on the header's first click.
