@@ -51,7 +51,7 @@ You type the sizes and limits in a box. Taller content scrolls inside its box, a
 
 Needs Obsidian 1.13 or later. Tested with Claudian 2.3.35 on Obsidian 1.14.5. Desktop only, like Claudian.
 
-Claudian - Minimal works with Claudian's internal structure: its CSS classes, its tab manager and its tab bar. A Claudian update can change those. When that happens, the affected part stops working and Claudian keeps working as usual. Please [open an issue](https://github.com/nndrch/claudian-minimal/issues) with your Claudian version.
+Claudian - Minimal works with Claudian's internal structure: its CSS classes, its tab manager and its tab bar. A Claudian update can change those. When that happens, the affected part stops working and Claudian keeps working as usual. Please [open an issue](https://github.com/nndrch/claudian-minimal/issues) with your Claudian version. [COMPATIBILITY.md](COMPATIBILITY.md) lists the Claudian versions checked so far.
 
 ## Privacy
 
