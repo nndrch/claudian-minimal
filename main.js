@@ -3,8 +3,9 @@
 
    styles.css carries the look, and most of it is always on.
    Settings → Claudian - Minimal has:
-   - Toggles: tab names, hiding the welcome brand and greeting, wrapping
-     long code lines, and the chat font. CSS switches are classes on
+   - Toggles: tab names, opening the linked note when you switch tabs,
+     opening a Claudian tab when you open a note, hiding the welcome brand and greeting, wrapping long code lines, and
+     the chat font. CSS switches are classes on
      <body> (cm-…).
    - Open by default: tool calls, thinking, "Worked for…" groups and
      subagent sections open by themselves in the newest reply of each chat.
@@ -17,6 +18,30 @@
    - Tab names: a tab shows its linked note's name instead of a number.
      A manual rename ("Rename tab…") wins while the tab keeps that
      conversation; a new conversation in the tab resets it.
+   - Open the note on tab switch (off by default): when you switch Claudian
+     tabs, the tab's linked note is shown in the main area. A leaf that
+     already shows the note is brought forward; otherwise the note opens in
+     the most recent main-area leaf. Focus stays in the chat.
+   - Tab for the opened note (off by default): when you open a note or
+     canvas in Obsidian, Claudian switches to the tab linked to it. If no
+     tab is, and the note stays active for a moment, the latest
+     conversation linked to it is reopened, or a new tab linked to it is
+     created. Notes that are already open get their tabs once Claudian's
+     tabs have settled. Closing a note in Obsidian closes its tab (a tab
+     that is working closes once its reply ends; closing the last tab leaves
+     a fresh empty one; the conversation stays in the history). With more
+     than one tab, empty tabs you're not on close by themselves, unless
+     their note is open, and closing a Claudian tab closes its note's Obsidian tabs
+     (not pinned ones, nor a note another Claudian tab still uses). The
+     tab bar stays visible with a single tab, as Obsidian's does, and lists
+     the tabs in the order of their notes in Obsidian (display only:
+     Claudian's own order is private).
+   - Close other tabs: an item in Claudian's tab menu (right-click a tab)
+     that closes every other tab. Tabs that are working stay open. If some
+     have replies you haven't read, it asks first.
+   - Compact from the context gauge: clicking the context usage gauge
+     sends /compact in that tab, after a confirmation. Not while a reply
+     is running.
    - Task notifications: each one is opened once when it appears, so its
      text renders as Markdown (Claudian 2.3.33 only renders it on the
      first click). styles.css keeps it expanded.
@@ -33,7 +58,7 @@
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- Obsidian loads main.js as CommonJS, and this plugin has no build step.
 const obsidian = require('obsidian');
-const { PluginSettingTab, TFile } = obsidian;
+const { PluginSettingTab, TFile, Menu, Modal, Setting } = obsidian;
 
 const VIEW_TYPE = 'claudian-view';
 const TABLE_WRAP = 'claudian-table-scroll';
@@ -47,11 +72,18 @@ const NOTIF_PATH = 'cm-notification-path';
 const HOLDS_NOTIF = 'cm-holds-notification';
 const ASSISTANT_CLASS = 'claudian-message-assistant';
 const POLL_MS = 1500;
+const FOLLOW_DELAY_MS = 1500; // how long a note stays active before it gets a new tab
+const FOLLOW_EXTENSIONS = new Set(['md', 'canvas']);
+const FOLLOW_VIEW_TYPES = new Set(['markdown', 'canvas']);
+const STARTUP_GRACE_MS = 4000; // before closing or catching up tabs after the plugin loads
+const TABS_SETTLED_MS = 3000; // the tab count must stay unchanged this long before catching up
 const PRUNE_GRACE_MS = 60000;
 const HEX_COLOR = /^#[0-9a-f]{6}$/i;
 
 const DEFAULTS = {
   tabNames: true,
+  openNoteOnTabSwitch: false,
+  tabsFollowNotes: false,
   hideWelcome: true,
   openToolCalls: true,
   openThinking: true,
@@ -337,6 +369,16 @@ class ClaudianMinimalSettingTab extends PluginSettingTab {
         'Name tabs after the linked note',
         "Show the linked note's name on each chat tab instead of a number. A manual rename wins until the tab starts a new conversation."
       ),
+      toggle(
+        'openNoteOnTabSwitch',
+        'Open the linked note when switching tabs',
+        "When you switch to another chat tab, show that tab's linked note in the main area. A tab that already shows the note is brought forward instead of opening it twice. Tabs without a linked note change nothing."
+      ),
+      toggle(
+        'tabsFollowNotes',
+        'Open a Claudian tab when opening a note',
+        "Keeps Claudian's tabs and your open notes in step. Opening a note or canvas switches to its tab; with none, and once the note stays open for a moment, its latest conversation reopens or a new tab starts. Notes already open get tabs too. Closing a note closes its tab (one that is working closes when its reply ends; the last one is replaced by an empty tab), and with more than one tab, empty tabs you're not on close, and closing a tab closes its note (not a pinned one). The tab bar shows even with a single tab and follows Obsidian's tab order. Conversations stay in the history."
+      ),
       toggle('hideWelcome', 'Hide the welcome brand and greeting', 'Hide the Claudian name and the greeting on the empty chat screen.'),
       {
         type: 'group',
@@ -472,6 +514,19 @@ module.exports = class ClaudianMinimalPlugin extends obsidian.Plugin {
     this.autoExpanded = new Set(Array.isArray(saved.autoExpandedTabs) ? saved.autoExpandedTabs : []);
     this.labelOwners = saved.labelOwners && typeof saved.labelOwners === 'object' ? saved.labelOwners : {};
     this.hookedManagers = new Set();
+    this.switchManagers = new Set(); // tab managers whose switchToTab is wrapped
+    this.closeManagers = new Set(); // tab managers whose closeTab is wrapped
+    this.tabBarViews = new Set(); // views whose tab bar shows with a single tab
+    this.revealSeq = 0;
+    this.syncing = 0; // > 0 while the plugin itself switches or creates a tab
+    this.prevOpen = null; // note paths open in Obsidian at the last check
+    this.caughtUp = false; // notes already open have been given tabs
+    this.lastTabCount = 0;
+    this.tabCountSince = Date.now();
+    this.syncBusy = false;
+    this.pendingClose = new Map(); // tab id → note path, closing once the reply ends
+    this.creating = new Set(); // note paths that are getting a tab right now
+    this.lcPatch = null; // the linked-content prototype while it no longer follows the active note
     this.signatures = new WeakMap();
     this.openedButtons = new WeakSet(); // task notification headers already clicked
     this.openedBlocks = new WeakSet(); // block headers already opened once
@@ -481,7 +536,13 @@ module.exports = class ClaudianMinimalPlugin extends obsidian.Plugin {
 
     this.addSettingTab(new ClaudianMinimalSettingTab(this.app, this));
     this.applyStyles();
-    this.registerEvent(this.app.workspace.on('window-open', (win) => this.applyStyles(win.doc)));
+    this.registerEvent(
+      this.app.workspace.on('window-open', (win) => {
+        this.applyStyles(win.doc);
+        this.registerDomEvent(win.doc, 'click', (evt) => this.onMeterClick(evt));
+      })
+    );
+    this.registerDomEvent(document, 'click', (evt) => this.onMeterClick(evt));
 
     this.observer = new MutationObserver((mutations) => {
       for (const m of mutations) {
@@ -496,19 +557,31 @@ module.exports = class ClaudianMinimalPlugin extends obsidian.Plugin {
 
     this.app.workspace.onLayoutReady(() => this.tick());
     this.registerEvent(this.app.workspace.on('layout-change', () => this.tick()));
-    this.registerEvent(this.app.workspace.on('file-open', () => this.tickSoon(250)));
+    this.registerEvent(
+      this.app.workspace.on('file-open', (file) => {
+        this.tickSoon(250);
+        this.noteOpened(file);
+      })
+    );
     this.registerEvent(this.app.vault.on('rename', () => this.tickSoon(800)));
     this.registerInterval(window.setInterval(() => this.tick(), POLL_MS));
+    this.hookTabMenu();
   }
 
   onunload() {
+    this.unhookTabMenu();
     if (this.observer) this.observer.disconnect();
     window.clearTimeout(this.tickTimer);
+    window.clearTimeout(this.followTimer);
     if (this.saveTimer) {
       window.clearTimeout(this.saveTimer);
       this.flush();
     }
     this.unhookAll();
+    this.unhookSwitch();
+    this.unhookClose();
+    this.unhookTabBar();
+    this.unfreezeAll();
     const clear = {};
     for (const name of CSS_VARS) clear[name] = '';
     for (const doc of this.documents()) {
@@ -527,9 +600,30 @@ module.exports = class ClaudianMinimalPlugin extends obsidian.Plugin {
     const before = Object.assign({}, this.settings);
     Object.assign(this.settings, patch);
     this.applyStyles();
-    if ('tabNames' in patch && before.tabNames !== this.settings.tabNames) {
-      if (this.settings.tabNames) this.tick();
-      else this.unhookAll();
+    // The tab bar wrapper serves both tab names and the tab order.
+    const barBefore = before.tabNames || before.tabsFollowNotes;
+    const barAfter = this.settings.tabNames || this.settings.tabsFollowNotes;
+    if (before.tabNames !== this.settings.tabNames || before.tabsFollowNotes !== this.settings.tabsFollowNotes) {
+      if (barAfter) {
+        this.signatures = new WeakMap(); // redraw the tab bars
+        this.tick();
+      } else if (barBefore) this.unhookAll();
+    }
+    if ('openNoteOnTabSwitch' in patch && before.openNoteOnTabSwitch !== this.settings.openNoteOnTabSwitch) {
+      if (this.settings.openNoteOnTabSwitch) this.tick();
+      else this.unhookSwitch();
+    }
+    if ('tabsFollowNotes' in patch && before.tabsFollowNotes !== this.settings.tabsFollowNotes) {
+      if (this.settings.tabsFollowNotes) {
+        this.prevOpen = null;
+        this.caughtUp = false;
+        this.tick();
+      } else {
+        window.clearTimeout(this.followTimer);
+        this.unfreezeAll();
+        this.unhookClose();
+        this.unhookTabBar();
+      }
     }
     for (const t of OPEN_TYPES) {
       if (!(t.key in patch) || before[t.key] === this.settings[t.key]) continue;
@@ -614,18 +708,38 @@ module.exports = class ClaudianMinimalPlugin extends obsidian.Plugin {
     for (const tm of this.hookedManagers) {
       if (!views.some((v) => v.tabManager === tm)) this.hookedManagers.delete(tm);
     }
+    for (const v of this.tabBarViews) {
+      if (!views.includes(v)) this.tabBarViews.delete(v);
+    }
+    for (const set of [this.switchManagers, this.closeManagers]) {
+      for (const tm of set) {
+        if (!views.some((v) => v.tabManager === tm)) set.delete(tm);
+      }
+    }
     const tabNames = this.settings.tabNames;
     const tabIds = new Set();
     for (const view of views) {
       try {
-        if (tabNames) {
+        if (this.settings.openNoteOnTabSwitch) this.hookSwitch(view);
+        if (this.settings.tabsFollowNotes) {
+          this.freezeDrafts(view);
+          this.hookClose(view);
+          this.hookTabBar(view);
+        }
+        if (tabNames || this.settings.tabsFollowNotes) {
           this.hook(view);
-          this.syncLabels(view);
           const idents = this.identities(view);
-          for (const i of idents) tabIds.add(i.id);
-          const sig = JSON.stringify(
-            idents.map((i) => [i.id, i.label || '', i.conversationId || '', this.linkedPath(view, i) || ''])
-          );
+          if (tabNames) {
+            this.syncLabels(view);
+            for (const i of idents) tabIds.add(i.id);
+          }
+          // Redraw when a tab, its name or its note changes, or when the
+          // notes' order in Obsidian does.
+          const order = this.settings.tabsFollowNotes ? [...this.openNotePaths()] : [];
+          const sig = JSON.stringify([
+            idents.map((i) => [i.id, i.label || '', i.conversationId || '', this.linkedPath(view, i) || '']),
+            order,
+          ]);
           if (this.signatures.get(view) !== sig) {
             this.signatures.set(view, sig);
             view.updateTabBar();
@@ -638,6 +752,144 @@ module.exports = class ClaudianMinimalPlugin extends obsidian.Plugin {
       }
     }
     if (tabIds.size > 0 && Date.now() - this.loadedAt > PRUNE_GRACE_MS) this.prune(tabIds);
+    if (this.settings.tabsFollowNotes && views[0]) this.syncTabsWithNotes(views[0]);
+  }
+
+  // ── Close other tabs ───────────────────────────────────────────
+
+  // Claudian builds its tab menu with Obsidian's Menu and opens it with
+  // showAtMouseEvent. The wrapper adds an item when the menu was opened on a
+  // Claudian tab; every other menu passes through untouched.
+  hookTabMenu() {
+    const proto = Menu && Menu.prototype;
+    if (!proto || typeof proto.showAtMouseEvent !== 'function' || this.menuPatch) return;
+    const original = proto.showAtMouseEvent;
+    const plugin = this;
+    const wrapped = function (evt) {
+      try {
+        plugin.extendTabMenu(this, evt);
+      } catch (e) {
+        plugin.warn('menu', e);
+      }
+      return original.call(this, evt);
+    };
+    proto.showAtMouseEvent = wrapped;
+    this.menuPatch = { proto, original, wrapped };
+  }
+
+  unhookTabMenu() {
+    const patch = this.menuPatch;
+    if (!patch) return;
+    this.menuPatch = null;
+    if (patch.proto.showAtMouseEvent === patch.wrapped) patch.proto.showAtMouseEvent = patch.original;
+  }
+
+  extendTabMenu(menu, evt) {
+    const target = evt && evt.target;
+    const badge = target && typeof target.closest === 'function' ? target.closest('.claudian-tab-badge') : null;
+    if (!badge || !badge.parentElement) return;
+    const view = this.views().find((v) => v.containerEl && v.containerEl.contains(badge));
+    if (!view) return;
+    const tm = view.tabManager;
+    if (typeof tm.getTabBarItems !== 'function' || typeof tm.closeTab !== 'function') return;
+    // The tab bar has one badge per item, in the same order.
+    const badges = [...badge.parentElement.querySelectorAll('.claudian-tab-badge')];
+    const items = tm.getTabBarItems();
+    const item = Array.isArray(items) ? items[badges.indexOf(badge)] : null;
+    if (!item || items.length < 2) return;
+    menu.addItem((i) =>
+      i
+        .setTitle('Close other tabs')
+        .setIcon('x-square')
+        .onClick(() => this.closeOtherTabs(view, item.id))
+    );
+  }
+
+  // Tabs that are working stay open. Tabs with replies you haven't read
+  // (Claudian's review and action-required states) need a confirmation.
+  closeOtherTabs(view, keepId) {
+    const tm = view.tabManager;
+    const items = tm.getTabBarItems().filter((i) => i.id !== keepId);
+    const closable = items.filter((i) => !(typeof tm.isTabWorking === 'function' && tm.isTabWorking(i.id)));
+    if (closable.length === 0) return;
+    const unread = closable.filter((i) => i.attention && (i.attention.kind === 'review' || i.attention.kind === 'action-required'));
+    const run = () =>
+      this.guarded(async () => {
+        for (const i of closable) await tm.closeTab(i.id);
+      });
+    if (unread.length === 0) {
+      run();
+      return;
+    }
+    new ConfirmModal(this.app, {
+      title: `Close ${closable.length} other ${closable.length === 1 ? 'tab' : 'tabs'}?`,
+      body:
+        unread.length === 1
+          ? "One of them has a reply you haven't read. The conversation stays in the history."
+          : `${unread.length} of them have replies you haven't read. The conversations stay in the history.`,
+      confirm: 'Close tabs',
+      onConfirm: run,
+    }).open();
+  }
+
+  // ── Compact from the context gauge ─────────────────────────────
+
+  onMeterClick(evt) {
+    const target = evt.target;
+    const meter = target && typeof target.closest === 'function' ? target.closest('.claudian-context-meter') : null;
+    if (!meter) return;
+    try {
+      const view = this.views().find((v) => v.containerEl && v.containerEl.contains(meter));
+      if (!view) return;
+      const tm = view.tabManager;
+      const tabs = typeof tm.getAllTabs === 'function' ? tm.getAllTabs() : [];
+      const owns = (t) => t && t.dom && Object.values(t.dom).some((el) => el && typeof el.contains === 'function' && el.contains(meter));
+      const tab = tabs.find(owns) || (typeof tm.getActiveTab === 'function' ? tm.getActiveTab() : null);
+      if (!tab) return;
+      evt.preventDefault();
+      this.compactTab(view, tab);
+    } catch (e) {
+      this.warn('compact', e);
+    }
+  }
+
+  compactTab(view, tab) {
+    const tm = view.tabManager;
+    const input = tab.controllers && tab.controllers.inputController;
+    const inputEl = tab.dom && tab.dom.inputEl;
+    if (!input || typeof input.sendMessage !== 'function' || !inputEl) return;
+    if ((typeof tm.isTabWorking === 'function' && tm.isTabWorking(tab.id)) || (tab.state && tab.state.isStreaming)) {
+      new obsidian.Notice('Wait for the reply to finish, then compact.');
+      return;
+    }
+    const messages = tab.state && Array.isArray(tab.state.messages) ? tab.state.messages.length : 0;
+    if (messages === 0) {
+      new obsidian.Notice('Nothing to compact yet.');
+      return;
+    }
+    new ConfirmModal(this.app, {
+      title: 'Compact this conversation?',
+      body: "Claude replaces the conversation so far with a summary, to free context. You can't undo this.",
+      confirm: 'Compact',
+      onConfirm: () => {
+        this.sendCompact(tm, tab, input, inputEl).catch((e) => this.warn('compact', e));
+      },
+    }).open();
+  }
+
+  // Sends /compact the way Enter does, then puts back what you had typed.
+  async sendCompact(tm, tab, input, inputEl) {
+    if ((typeof tm.isTabWorking === 'function' && tm.isTabWorking(tab.id)) || (tab.state && tab.state.isStreaming)) {
+      new obsidian.Notice('Wait for the reply to finish, then compact.');
+      return;
+    }
+    const typed = typeof inputEl.value === 'string' ? inputEl.value : '';
+    inputEl.value = '/compact';
+    try {
+      await input.sendMessage();
+    } finally {
+      if (typed && inputEl.value === '') inputEl.value = typed;
+    }
   }
 
   // ── Tab names ──────────────────────────────────────────────────
@@ -685,15 +937,429 @@ module.exports = class ClaudianMinimalPlugin extends obsidian.Plugin {
     }
   }
 
+  // ── Open the note on tab switch ────────────────────────────────
+
+  // Wraps the tab manager's switchToTab: after Claudian has switched, the new
+  // tab's linked note is shown. Claudian's own method comes back when the
+  // setting is turned off or the plugin unloads.
+  hookSwitch(view) {
+    const tm = view.tabManager;
+    if (this.switchManagers.has(tm) || typeof tm.switchToTab !== 'function') return;
+    const original = tm.switchToTab;
+    tm.switchToTab = async (...args) => {
+      const before = typeof tm.getActiveTabId === 'function' ? tm.getActiveTabId() : null;
+      const result = await original.apply(tm, args);
+      try {
+        this.showLinkedNote(view, before);
+      } catch (e) {
+        this.warn('switch', e);
+      }
+      return result;
+    };
+    this.switchManagers.add(tm);
+  }
+
+  unhookSwitch() {
+    for (const tm of this.switchManagers) {
+      try {
+        delete tm.switchToTab;
+      } catch {
+        /* ignore */
+      }
+    }
+    this.switchManagers.clear();
+  }
+
+  // Only reacts to a switch you make in the chat: the tab must really change
+  // and the Claudian view must be the active one, so Claudian restoring its
+  // tabs on startup or switching one in the background doesn't move your notes.
+  showLinkedNote(view, before) {
+    if (!this.settings.openNoteOnTabSwitch || this.syncing > 0) return;
+    const tm = view.tabManager;
+    const after = typeof tm.getActiveTabId === 'function' ? tm.getActiveTabId() : null;
+    if (!after || after === before) return;
+    if (this.app.workspace.getActiveViewOfType(obsidian.ItemView) !== view) return;
+    const ident = this.identities(view).find((i) => i.id === after);
+    const path = this.linkedPath(view, ident);
+    const file = path ? this.app.vault.getAbstractFileByPath(path) : null;
+    if (!(file instanceof TFile)) return;
+    const seq = ++this.revealSeq;
+    this.revealFile(view, file, seq).catch((e) => this.warn('reveal', e));
+  }
+
+  async revealFile(view, file, seq) {
+    const ws = this.app.workspace;
+    let existing = null;
+    ws.iterateAllLeaves((leaf) => {
+      if (!existing && leaf !== view.leaf && this.leafPath(leaf) === file.path) existing = leaf;
+    });
+    if (existing) {
+      ws.setActiveLeaf(existing, { focus: false });
+      return;
+    }
+    // Rapid switching: only the last tab's note opens.
+    if (seq !== this.revealSeq) return;
+    let leaf = ws.getLeaf(false);
+    if (!leaf || leaf === view.leaf || (leaf.view && leaf.view.getViewType() === VIEW_TYPE)) leaf = ws.getLeaf('tab');
+    await leaf.openFile(file, { active: false });
+  }
+
+  // ── Tab for the opened note ────────────────────────────────────
+
+  // Switching to a tab already linked to the note is instant. Otherwise the
+  // note has to stay active for FOLLOW_DELAY_MS, so skimming through notes
+  // doesn't create a tab for each one.
+  noteOpened(file) {
+    window.clearTimeout(this.followTimer);
+    if (!this.settings.tabsFollowNotes || this.syncing > 0) return;
+    if (!(file instanceof TFile) || !FOLLOW_EXTENSIONS.has(file.extension)) return;
+    const view = this.views()[0];
+    if (!view) return;
+    const tm = view.tabManager;
+    const tabId = this.tabFor(view, file.path);
+    if (tabId) {
+      if (tabId !== tm.getActiveTabId()) this.guarded(() => tm.switchToTab(tabId));
+      return;
+    }
+    this.followTimer = window.setTimeout(() => this.guarded(() => this.openTabFor(file.path)), FOLLOW_DELAY_MS);
+  }
+
+  // The id of the tab linked to a path (the active one first), or null.
+  tabFor(view, path) {
+    const tm = view.tabManager;
+    const activeId = typeof tm.getActiveTabId === 'function' ? tm.getActiveTabId() : null;
+    const matches = this.identities(view).filter((i) => this.linkedPath(view, i) === path);
+    const best = matches.find((i) => i.id === activeId) || matches[0];
+    return best ? best.id : null;
+  }
+
+  // Runs the action with the other direction muted, and reports any error.
+  guarded(action) {
+    this.syncing++;
+    return Promise.resolve()
+      .then(action)
+      .catch((e) => this.warn('follow', e))
+      .finally(() => {
+        this.syncing--;
+      });
+  }
+
+  // An empty chat tab links itself to whichever note is active, until its
+  // first message. That would make a tab "move" to each note you open, so
+  // while this setting is on, a tab keeps the note it was linked to. The two
+  // methods that do the following are replaced on the linked-content class
+  // itself, so it holds for every tab, including ones Claudian loads or
+  // creates later. A new tab still starts linked to the active note.
+  freezeDrafts(view) {
+    if (this.lcPatch) return;
+    const tm = view.tabManager;
+    if (typeof tm.getTab !== 'function') return;
+    for (const ident of this.identities(view)) {
+      const tab = tm.getTab(ident.id);
+      const lc = tab && tab.linkedContent;
+      const proto = lc ? Object.getPrototypeOf(lc) : null;
+      if (!proto || !Object.prototype.hasOwnProperty.call(proto, 'handleActiveFileChanged')) continue;
+      this.lcPatch = {
+        proto,
+        changed: proto.handleActiveFileChanged,
+        metadata: proto.handleActiveFileMetadataChanged,
+      };
+      const noop = () => {};
+      proto.handleActiveFileChanged = noop;
+      proto.handleActiveFileMetadataChanged = noop;
+      return;
+    }
+  }
+
+  unfreezeAll() {
+    const patch = this.lcPatch;
+    if (!patch) return;
+    this.lcPatch = null;
+    patch.proto.handleActiveFileChanged = patch.changed;
+    patch.proto.handleActiveFileMetadataChanged = patch.metadata;
+  }
+
+  // quiet: for a note that is already open. The new tab doesn't take over
+  // as the active one, and the note doesn't have to be the active file.
+  async openTabFor(path, quiet = false) {
+    const active = this.app.workspace.getActiveFile();
+    if (!this.settings.tabsFollowNotes) return;
+    if (!quiet && (!active || active.path !== path)) return; // you moved on
+    const view = this.views()[0];
+    if (!view || this.creating.has(path)) return;
+    const tm = view.tabManager;
+    if (this.tabFor(view, path)) return;
+    if (typeof tm.canCreateTab === 'function' && !tm.canCreateTab()) return;
+    if (typeof tm.createTab !== 'function') return;
+    this.creating.add(path);
+    try {
+      // A new tab: with the latest conversation linked to the note if there
+      // is one (openConversation would replace the active tab instead).
+      const conv = this.latestConversation(view, path);
+      const made = await tm.createTab(conv ? conv.id : null, null, { activate: !quiet });
+      const tab = made && made.linkedContent ? made : typeof tm.getActiveTab === 'function' ? tm.getActiveTab() : null;
+      const lc = tab && tab.linkedContent;
+      if (!lc) return;
+      this.freezeDrafts(view);
+      const snap = typeof lc.getSnapshot === 'function' ? lc.getSnapshot() : null;
+      // A new empty tab links itself to the active note; make sure it did.
+      if (snap && snap.path !== path && (snap.mode === 'auto-draft' || snap.mode === 'explicit-draft') && typeof lc.selectExplicit === 'function') {
+        lc.selectExplicit(path);
+      }
+    } finally {
+      // Hold the lock a moment, until the new tab shows up in the tab list.
+      window.setTimeout(() => this.creating.delete(path), 1000);
+    }
+  }
+
+  // Wraps the tab manager's closeTab, which Claudian's close button, middle
+  // click and menu all go through: once a tab is really closed, the Obsidian
+  // tabs showing its note close too, unless another Claudian tab still uses
+  // the note. Pinned Obsidian tabs stay.
+  hookClose(view) {
+    const tm = view.tabManager;
+    if (this.closeManagers.has(tm) || typeof tm.closeTab !== 'function') return;
+    const original = tm.closeTab;
+    tm.closeTab = async (id, ...rest) => {
+      let path = null;
+      try {
+        path = this.linkedPath(view, this.identities(view).find((i) => i.id === id));
+      } catch (e) {
+        this.warn('close', e);
+      }
+      const result = await original.call(tm, id, ...rest);
+      try {
+        if (path && this.settings.tabsFollowNotes) this.closeNoteFor(view, id, path);
+      } catch (e) {
+        this.warn('close', e);
+      }
+      return result;
+    };
+    this.closeManagers.add(tm);
+  }
+
+  unhookClose() {
+    for (const tm of this.closeManagers) {
+      try {
+        delete tm.closeTab;
+      } catch {
+        /* ignore */
+      }
+    }
+    this.closeManagers.clear();
+  }
+
+  // Claudian hides its tab bar below two tabs. While the tabs mirror the
+  // notes, it stays visible with one, so the single tab's name shows. The
+  // wide layout keeps Claudian's own rule.
+  hookTabBar(view) {
+    if (this.tabBarViews.has(view) || typeof view.isTabBarVisible !== 'function' || typeof view.updateTabBarVisibility !== 'function') return;
+    view.isTabBarVisible = () => {
+      const tm = view.tabManager;
+      const wide = !!(view.layout && view.layout.isWide);
+      const count = tm && typeof tm.getTabCount === 'function' ? tm.getTabCount() : 0;
+      return !wide && count >= 1;
+    };
+    this.tabBarViews.add(view);
+    view.updateTabBarVisibility();
+  }
+
+  unhookTabBar() {
+    for (const view of this.tabBarViews) {
+      try {
+        delete view.isTabBarVisible;
+        view.updateTabBarVisibility();
+      } catch {
+        /* ignore */
+      }
+    }
+    this.tabBarViews.clear();
+  }
+
+  closeNoteFor(view, id, path) {
+    const idents = this.identities(view);
+    if (idents.some((i) => i.id === id)) return; // the tab didn't close
+    if (idents.some((i) => this.linkedPath(view, i) === path)) return; // another tab still uses the note
+    const leaves = [];
+    this.app.workspace.iterateAllLeaves((leaf) => {
+      if (leaf === view.leaf || this.leafPath(leaf) !== path) return;
+      const st = leaf.getViewState();
+      if (!st || !st.pinned) leaves.push(leaf);
+    });
+    for (const leaf of leaves) leaf.detach();
+  }
+
+  // The note or canvas a leaf shows. A leaf Obsidian hasn't loaded yet has no
+  // view.file, so its saved state is read instead.
+  leafPath(leaf) {
+    try {
+      const st = leaf.getViewState();
+      if (!st || !FOLLOW_VIEW_TYPES.has(st.type)) return null;
+      const v = leaf.view;
+      if (v && v.file && v.file.path) return v.file.path;
+      return st.state && typeof st.state.file === 'string' ? st.state.file : null;
+    } catch {
+      return null;
+    }
+  }
+
+  openNotePaths() {
+    const out = new Set();
+    this.app.workspace.iterateAllLeaves((leaf) => {
+      const path = this.leafPath(leaf);
+      if (path) out.add(path);
+    });
+    return out;
+  }
+
+  // Runs on every check while the setting is on: closes the tabs of notes
+  // that were open and no longer are, and (once Claudian's tabs have settled)
+  // gives every note that is already open a tab. The first check only
+  // records which notes are open, so turning the setting on never closes tabs.
+  syncTabsWithNotes(view) {
+    if (this.syncBusy) return;
+    const open = this.openNotePaths();
+    const prev = this.prevOpen;
+    this.prevOpen = open;
+    const now = Date.now();
+    const count = this.identities(view).length;
+    if (count !== this.lastTabCount) {
+      this.lastTabCount = count;
+      this.tabCountSince = now;
+    }
+    if (now - this.loadedAt < STARTUP_GRACE_MS) return;
+    const settled = count > 0 && now - this.tabCountSince >= TABS_SETTLED_MS;
+    const closed = prev ? [...prev].filter((p) => !open.has(p)) : [];
+    const catchUp = settled && !this.caughtUp;
+    const due = this.duePendingCloses(view, open);
+    const empty = this.emptyTabsToClose(view, open);
+    if (closed.length === 0 && !catchUp && due.length === 0 && empty.length === 0) return;
+    const tm = view.tabManager;
+    this.syncBusy = true;
+    this.guarded(async () => {
+      for (const path of closed) await this.closeTabsFor(view, path);
+      for (const id of due) await this.closeTabNow(view, id);
+      for (const id of empty) {
+        if (this.identities(view).length <= 1) break;
+        if (this.isEmptyTab(view, id)) await tm.closeTab(id);
+      }
+      if (catchUp) {
+        this.caughtUp = true;
+        for (const path of open) await this.openTabFor(path, true);
+      }
+    }).finally(() => {
+      this.syncBusy = false;
+    });
+  }
+
+  // Closes the tabs linked to a note that is no longer open. A tab that is
+  // working is never cut off: it closes once its reply ends (see
+  // duePendingCloses). The conversation stays in the history.
+  async closeTabsFor(view, path) {
+    const tm = view.tabManager;
+    if (typeof tm.closeTab !== 'function') return;
+    for (const ident of [...this.identities(view)]) {
+      if (this.linkedPath(view, ident) !== path) continue;
+      if (typeof tm.isTabWorking === 'function' && tm.isTabWorking(ident.id)) {
+        this.pendingClose.set(ident.id, path);
+        continue;
+      }
+      await this.closeTabNow(view, ident.id);
+    }
+  }
+
+  // Claudian replaces the last tab with a fresh one when it closes. It
+  // refuses to close a last tab that is already empty, so that one is only
+  // unlinked from its note.
+  async closeTabNow(view, id) {
+    const tm = view.tabManager;
+    const closed = await tm.closeTab(id);
+    if (closed) return;
+    const tab = typeof tm.getTab === 'function' ? tm.getTab(id) : null;
+    const lc = tab && tab.linkedContent;
+    const snap = lc && typeof lc.getSnapshot === 'function' ? lc.getSnapshot() : null;
+    if (snap && snap.path && (snap.mode === 'auto-draft' || snap.mode === 'explicit-draft') && typeof lc.selectExplicit === 'function') {
+      lc.selectExplicit(null);
+    }
+  }
+
+  // With more than one tab, an empty tab closes by itself unless it's the one
+  // you're on or its note is open in Obsidian (then it's that note's tab).
+  emptyTabsToClose(view, open) {
+    const tm = view.tabManager;
+    const idents = this.identities(view);
+    if (idents.length <= 1 || typeof tm.closeTab !== 'function') return [];
+    const activeId = typeof tm.getActiveTabId === 'function' ? tm.getActiveTabId() : null;
+    const out = [];
+    for (const ident of idents) {
+      if (ident.id === activeId || !this.isEmptyTab(view, ident.id)) continue;
+      const path = this.linkedPath(view, ident);
+      if (path && open.has(path)) continue;
+      out.push(ident.id);
+    }
+    // Keep at least one tab.
+    return out.length >= idents.length ? out.slice(1) : out;
+  }
+
+  // Empty: loaded, no conversation, no messages, not working, nothing typed.
+  // A tab Claudian hasn't loaded yet may hold a parked draft, so it counts as
+  // not empty.
+  isEmptyTab(view, id) {
+    const tm = view.tabManager;
+    const ident = this.identities(view).find((i) => i.id === id);
+    const tab = typeof tm.getTab === 'function' ? tm.getTab(id) : null;
+    if (!ident || !tab || ident.conversationId) return false;
+    if (typeof tm.isTabWorking === 'function' && tm.isTabWorking(id)) return false;
+    const messages = tab.state && Array.isArray(tab.state.messages) ? tab.state.messages.length : 0;
+    if (messages > 0) return false;
+    const input = tab.dom && tab.dom.inputEl;
+    const typed = input ? (typeof input.value === 'string' ? input.value : input.textContent || '') : '';
+    return typed.trim() === '';
+  }
+
+  // Tabs waiting to close whose reply has ended. A wait is dropped if the
+  // tab is gone, links another note, or its note was opened again.
+  duePendingCloses(view, open) {
+    const tm = view.tabManager;
+    const idents = new Map(this.identities(view).map((i) => [i.id, i]));
+    const due = [];
+    for (const [id, path] of this.pendingClose) {
+      const ident = idents.get(id);
+      if (!ident || open.has(path) || this.linkedPath(view, ident) !== path) {
+        this.pendingClose.delete(id);
+        continue;
+      }
+      if (typeof tm.isTabWorking === 'function' && tm.isTabWorking(id)) continue;
+      this.pendingClose.delete(id);
+      due.push(id);
+    }
+    return due;
+  }
+
+  // The most recent conversation linked to the path that isn't archived.
+  latestConversation(view, path) {
+    const plugin = view.plugin;
+    const list = plugin && typeof plugin.getConversationList === 'function' ? plugin.getConversationList() : null;
+    if (!Array.isArray(list)) return null;
+    let best = null;
+    for (const c of list) {
+      if (!c || c.linkedContentPath !== path || c.archived || c.isArchived) continue;
+      if (!best || (c.lastActivityAt || c.createdAt || 0) > (best.lastActivityAt || best.createdAt || 0)) best = c;
+    }
+    return best;
+  }
+
   // Runs inside Claudian's updateTabBar(), right before the tab bar renders.
   decorate(view, items) {
     if (!Array.isArray(items)) return items;
     const tabBar = view.tabBar;
     const expanded = tabBar && tabBar.expandedTitleTabIds instanceof Set ? tabBar.expandedTitleTabIds : null;
     const idents = new Map(this.identities(view).map((i) => [i.id, i]));
+    const pathOf = (item) => this.linkedPath(view, idents.get(item.id) || { id: item.id });
     let expandedNew = false;
-    const out = items.map((item) => {
-      const name = this.noteName(this.linkedPath(view, idents.get(item.id) || { id: item.id }));
+    let out = items.map((item) => {
+      if (!this.settings.tabNames) return item;
+      const name = this.noteName(pathOf(item));
       if (!name) return item;
       // Show the name instead of the number, once per tab. If you switch
       // a tab back to "Show number", that sticks.
@@ -704,6 +1370,18 @@ module.exports = class ClaudianMinimalPlugin extends obsidian.Plugin {
       }
       return { ...item, title: name };
     });
+    // Tabs follow the order of their notes in Obsidian. Tabs whose note
+    // isn't open keep Claudian's order, after the others.
+    if (this.settings.tabsFollowNotes) {
+      const rank = new Map([...this.openNotePaths()].map((p, i) => [p, i]));
+      out = out
+        .map((item, i) => {
+          const r = rank.get(pathOf(item));
+          return { item, key: r === undefined ? rank.size + i : r, i };
+        })
+        .sort((a, b) => a.key - b.key || a.i - b.i)
+        .map((x) => x.item);
+    }
     if (expandedNew) {
       this.saveSoon();
       window.setTimeout(() => {
@@ -936,6 +1614,34 @@ module.exports = class ClaudianMinimalPlugin extends obsidian.Plugin {
     console.warn(`[claudian-minimal] ${where}:`, error);
   }
 };
+
+class ConfirmModal extends Modal {
+  constructor(app, opts) {
+    super(app);
+    this.opts = opts;
+  }
+
+  onOpen() {
+    const { title, body, confirm, onConfirm } = this.opts;
+    this.setTitle(title);
+    this.contentEl.createEl('p', { text: body });
+    new Setting(this.contentEl)
+      .addButton((b) => b.setButtonText('Cancel').onClick(() => this.close()))
+      .addButton((b) =>
+        b
+          .setButtonText(confirm)
+          .setWarning()
+          .onClick(() => {
+            this.close();
+            onConfirm();
+          })
+      );
+  }
+
+  onClose() {
+    this.contentEl.empty();
+  }
+}
 
 const convCreatedAt = (id) => {
   const m = /^conv-(\d+)-/.exec(id || '');
