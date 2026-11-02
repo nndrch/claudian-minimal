@@ -506,3 +506,8 @@ body .cm-number-unit {
 body .claudian-context-meter {
   cursor: pointer;
 }
+
+/* Slash-command menu: the typed letters (Claudian 2.3.38+) follow the accent setting. */
+body .claudian-composer-dropdown-match {
+  color: var(--cm-accent, var(--text-accent));
+}
