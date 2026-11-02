@@ -39,6 +39,9 @@
    - Close other tabs: an item in Claudian's tab menu (right-click a tab)
      that closes every other tab. Tabs that are working stay open. If some
      have replies you haven't read, it asks first.
+   - Compact from the context gauge: clicking the context usage gauge
+     sends /compact in that tab, after a confirmation. Not while a reply
+     is running.
    - Task notifications: each one is opened once when it appears, so its
      text renders as Markdown (Claudian 2.3.33 only renders it on the
      first click). styles.css keeps it expanded.
@@ -533,7 +536,13 @@ module.exports = class ClaudianMinimalPlugin extends obsidian.Plugin {
 
     this.addSettingTab(new ClaudianMinimalSettingTab(this.app, this));
     this.applyStyles();
-    this.registerEvent(this.app.workspace.on('window-open', (win) => this.applyStyles(win.doc)));
+    this.registerEvent(
+      this.app.workspace.on('window-open', (win) => {
+        this.applyStyles(win.doc);
+        this.registerDomEvent(win.doc, 'click', (evt) => this.onMeterClick(evt));
+      })
+    );
+    this.registerDomEvent(document, 'click', (evt) => this.onMeterClick(evt));
 
     this.observer = new MutationObserver((mutations) => {
       for (const m of mutations) {
@@ -821,6 +830,66 @@ module.exports = class ClaudianMinimalPlugin extends obsidian.Plugin {
       confirm: 'Close tabs',
       onConfirm: run,
     }).open();
+  }
+
+  // ── Compact from the context gauge ─────────────────────────────
+
+  onMeterClick(evt) {
+    const target = evt.target;
+    const meter = target && typeof target.closest === 'function' ? target.closest('.claudian-context-meter') : null;
+    if (!meter) return;
+    try {
+      const view = this.views().find((v) => v.containerEl && v.containerEl.contains(meter));
+      if (!view) return;
+      const tm = view.tabManager;
+      const tabs = typeof tm.getAllTabs === 'function' ? tm.getAllTabs() : [];
+      const owns = (t) => t && t.dom && Object.values(t.dom).some((el) => el && typeof el.contains === 'function' && el.contains(meter));
+      const tab = tabs.find(owns) || (typeof tm.getActiveTab === 'function' ? tm.getActiveTab() : null);
+      if (!tab) return;
+      evt.preventDefault();
+      this.compactTab(view, tab);
+    } catch (e) {
+      this.warn('compact', e);
+    }
+  }
+
+  compactTab(view, tab) {
+    const tm = view.tabManager;
+    const input = tab.controllers && tab.controllers.inputController;
+    const inputEl = tab.dom && tab.dom.inputEl;
+    if (!input || typeof input.sendMessage !== 'function' || !inputEl) return;
+    if ((typeof tm.isTabWorking === 'function' && tm.isTabWorking(tab.id)) || (tab.state && tab.state.isStreaming)) {
+      new obsidian.Notice('Wait for the reply to finish, then compact.');
+      return;
+    }
+    const messages = tab.state && Array.isArray(tab.state.messages) ? tab.state.messages.length : 0;
+    if (messages === 0) {
+      new obsidian.Notice('Nothing to compact yet.');
+      return;
+    }
+    new ConfirmModal(this.app, {
+      title: 'Compact this conversation?',
+      body: "Claude replaces the conversation so far with a summary, to free context. You can't undo this.",
+      confirm: 'Compact',
+      onConfirm: () => {
+        this.sendCompact(tm, tab, input, inputEl).catch((e) => this.warn('compact', e));
+      },
+    }).open();
+  }
+
+  // Sends /compact the way Enter does, then puts back what you had typed.
+  async sendCompact(tm, tab, input, inputEl) {
+    if ((typeof tm.isTabWorking === 'function' && tm.isTabWorking(tab.id)) || (tab.state && tab.state.isStreaming)) {
+      new obsidian.Notice('Wait for the reply to finish, then compact.');
+      return;
+    }
+    const typed = typeof inputEl.value === 'string' ? inputEl.value : '';
+    inputEl.value = '/compact';
+    try {
+      await input.sendMessage();
+    } finally {
+      if (typed && inputEl.value === '') inputEl.value = typed;
+    }
   }
 
   // ── Tab names ──────────────────────────────────────────────────

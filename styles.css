@@ -501,3 +501,8 @@ body .cm-number-unit {
   color: var(--text-muted);
   font-size: var(--font-ui-small);
 }
+
+/* Context gauge: clicking it compacts the conversation (main.js). */
+body .claudian-context-meter {
+  cursor: pointer;
+}
