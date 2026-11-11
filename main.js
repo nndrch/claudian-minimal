@@ -36,6 +36,12 @@
      tab bar stays visible with a single tab, as Obsidian's does, and lists
      the tabs in the order of their notes in Obsidian (display only:
      Claudian's own order is private).
+   - Open in Claudian (on by default): right-click a folder or a file and
+     choose "Open in Claudian". It switches to a tab linked to it, else
+     reopens its latest conversation, else opens a new tab linked to it. A
+     file also opens in the editor. Switching to a folder's tab reveals the
+     folder in the file explorer when "Open the note on tab switch" is on.
+     Folder tabs come first in the tab bar, A to Z.
    - Close other tabs: an item in Claudian's tab menu (right-click a tab)
      that closes every other tab. Tabs that are working stay open. If some
      have replies you haven't read, it asks first.
@@ -58,9 +64,11 @@
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- Obsidian loads main.js as CommonJS, and this plugin has no build step.
 const obsidian = require('obsidian');
-const { PluginSettingTab, TFile, Menu, Modal, Setting } = obsidian;
+const { PluginSettingTab, TFile, TFolder, Menu, Modal, Setting } = obsidian;
 
 const VIEW_TYPE = 'claudian-view';
+const CLAUDIAN_ID = 'realclaudian'; // Claudian's plugin id
+const VIEW_WAIT_MS = 3000; // how long a freshly opened Claudian view gets to set up its tabs
 const TABLE_WRAP = 'claudian-table-scroll';
 const TABLE_SEL = '.claudian-message-content table';
 const NOTIF_SEL = '.claudian-task-notification > .claudian-work-header[aria-expanded="false"]';
@@ -70,6 +78,8 @@ const WORK_HISTORY_CLASS = 'claudian-work-history';
 const RAW_TEXT = 'cm-raw-text';
 const NOTIF_PATH = 'cm-notification-path';
 const HOLDS_NOTIF = 'cm-holds-notification';
+const FOLDER_REVEAL = 'cm-folder-reveal'; // a folder the plugin revealed: its flash uses the accent
+const FOLDER_REVEAL_MS = 3000; // longer than Obsidian's flash
 const ASSISTANT_CLASS = 'claudian-message-assistant';
 const POLL_MS = 1500;
 const FOLLOW_DELAY_MS = 1500; // how long a note stays active before it gets a new tab
@@ -84,6 +94,7 @@ const DEFAULTS = {
   tabNames: true,
   openNoteOnTabSwitch: false,
   tabsFollowNotes: false,
+  folderChats: true,
   hideWelcome: true,
   openToolCalls: true,
   openThinking: true,
@@ -379,6 +390,11 @@ class ClaudianMinimalSettingTab extends PluginSettingTab {
         'Open a Claudian tab when opening a note',
         "Keeps Claudian's tabs and your open notes in step. Opening a note or canvas switches to its tab; with none, and once the note stays open for a moment, its latest conversation reopens or a new tab starts. Notes already open get tabs too. Closing a note closes its tab (one that is working closes when its reply ends; the last one is replaced by an empty tab), and with more than one tab, empty tabs you're not on close, and closing a tab closes its note (not a pinned one). The tab bar shows even with a single tab and follows Obsidian's tab order. Conversations stay in the history."
       ),
+      toggle(
+        'folderChats',
+        'Open in Claudian from the file menu',
+        'Adds "Open in Claudian" to the right-click menu of folders and files. It switches to the chat tab linked to it; with none, its latest conversation reopens or a new tab starts, linked to it. A file also opens in the editor. With "Open the linked note when switching tabs" on, switching to a folder\'s tab reveals the folder in the file explorer. Folder tabs come first in the tab bar, A to Z.'
+      ),
       toggle('hideWelcome', 'Hide the welcome brand and greeting', 'Hide the Claudian name and the greeting on the empty chat screen.'),
       {
         type: 'group',
@@ -517,6 +533,8 @@ module.exports = class ClaudianMinimalPlugin extends obsidian.Plugin {
     this.switchManagers = new Set(); // tab managers whose switchToTab is wrapped
     this.closeManagers = new Set(); // tab managers whose closeTab is wrapped
     this.tabBarViews = new Set(); // views whose tab bar shows with a single tab
+    this.moveBars = new Map(); // tab bar → its own onTabMove, while wrapped
+    this.dragViews = new WeakSet(); // views whose tab drags are checked
     this.revealSeq = 0;
     this.syncing = 0; // > 0 while the plugin itself switches or creates a tab
     this.prevOpen = null; // note paths open in Obsidian at the last check
@@ -564,6 +582,7 @@ module.exports = class ClaudianMinimalPlugin extends obsidian.Plugin {
       })
     );
     this.registerEvent(this.app.vault.on('rename', () => this.tickSoon(800)));
+    this.registerEvent(this.app.workspace.on('file-menu', (menu, file) => this.extendFileMenu(menu, file)));
     this.registerInterval(window.setInterval(() => this.tick(), POLL_MS));
     this.hookTabMenu();
   }
@@ -581,12 +600,13 @@ module.exports = class ClaudianMinimalPlugin extends obsidian.Plugin {
     this.unhookSwitch();
     this.unhookClose();
     this.unhookTabBar();
+    this.unhookTabMoves();
     this.unfreezeAll();
     const clear = {};
     for (const name of CSS_VARS) clear[name] = '';
     for (const doc of this.documents()) {
-      for (const el of doc.querySelectorAll(`.${RAW_TEXT}, .${NOTIF_PATH}`)) {
-        el.classList.remove(RAW_TEXT, NOTIF_PATH, HOLDS_NOTIF);
+      for (const el of doc.querySelectorAll(`.${RAW_TEXT}, .${NOTIF_PATH}, .${FOLDER_REVEAL}`)) {
+        el.classList.remove(RAW_TEXT, NOTIF_PATH, HOLDS_NOTIF, FOLDER_REVEAL);
       }
       for (const cls of BODY_CLASSES) doc.body.classList.remove(cls);
       this.setVars(doc.body, clear);
@@ -726,6 +746,7 @@ module.exports = class ClaudianMinimalPlugin extends obsidian.Plugin {
           this.hookClose(view);
           this.hookTabBar(view);
         }
+        this.guardTabMoves(view);
         if (tabNames || this.settings.tabsFollowNotes) {
           this.hook(view);
           const idents = this.identities(view);
@@ -790,6 +811,7 @@ module.exports = class ClaudianMinimalPlugin extends obsidian.Plugin {
     if (!badge || !badge.parentElement) return;
     const view = this.views().find((v) => v.containerEl && v.containerEl.contains(badge));
     if (!view) return;
+    if (this.ordersTabs(view)) this.dropMoveItems(menu);
     const tm = view.tabManager;
     if (typeof tm.getTabBarItems !== 'function' || typeof tm.closeTab !== 'function') return;
     // The tab bar has one badge per item, in the same order.
@@ -803,6 +825,74 @@ module.exports = class ClaudianMinimalPlugin extends obsidian.Plugin {
         .setIcon('x-square')
         .onClick(() => this.closeOtherTabs(view, item.id))
     );
+  }
+
+  // ── Tab order ──────────────────────────────────────────────────
+
+  // True while the plugin orders this view's tab bar: note tabs follow
+  // Obsidian's tab order, folder tabs come first. Claudian 2.3.42+ also lets
+  // you drag tabs or move them from the tab menu; that order would be undone
+  // on the next redraw, so moving is turned off while the plugin orders.
+  ordersTabs(view) {
+    if (!this.hookedManagers.has(view.tabManager)) return false;
+    if (this.settings.tabsFollowNotes) return true;
+    if (!this.settings.folderChats) return false;
+    return this.identities(view).some((i) => {
+      const path = this.linkedPath(view, i);
+      return !!path && this.app.vault.getAbstractFileByPath(path) instanceof TFolder;
+    });
+  }
+
+  // Drags start on a pointerdown on a badge. A capture listener on the view
+  // stops it from reaching the badge while the plugin orders, so the badge
+  // doesn't lift; clicks, middle clicks and the menu are separate events.
+  // onTabMove is wrapped too, for any other path to Claudian's move.
+  guardTabMoves(view) {
+    const bar = view.tabBar;
+    const cbs = bar && bar.callbacks;
+    if (cbs && typeof cbs.onTabMove === 'function' && !this.moveBars.has(bar)) {
+      const original = cbs.onTabMove;
+      this.moveBars.set(bar, original);
+      cbs.onTabMove = (...args) => {
+        if (this.ordersTabs(view)) return;
+        return original.apply(cbs, args);
+      };
+    }
+    if (!this.dragViews.has(view) && view.containerEl && typeof cbs?.onTabMove === 'function') {
+      this.dragViews.add(view);
+      this.registerDomEvent(
+        view.containerEl,
+        'pointerdown',
+        (evt) => {
+          const t = evt.target;
+          if (evt.button !== 0 || !t || typeof t.closest !== 'function' || !t.closest('.claudian-tab-badge')) return;
+          if (this.ordersTabs(view)) evt.stopPropagation();
+        },
+        { capture: true }
+      );
+    }
+  }
+
+  unhookTabMoves() {
+    for (const [bar, original] of this.moveBars) {
+      try {
+        if (bar.callbacks) bar.callbacks.onTabMove = original;
+      } catch {
+        /* ignore */
+      }
+    }
+    this.moveBars.clear();
+  }
+
+  // Claudian's "Move left" and "Move right", found by their icons (the
+  // titles are translated).
+  dropMoveItems(menu) {
+    if (!Array.isArray(menu.items)) return;
+    const isMove = (i) => !!(i && i.iconEl && i.iconEl.querySelector('.lucide-arrow-left, .lucide-arrow-right'));
+    for (const i of menu.items.filter(isMove)) {
+      menu.items.splice(menu.items.indexOf(i), 1);
+      if (i.dom && typeof i.dom.remove === 'function') i.dom.remove();
+    }
   }
 
   // Tabs that are working stay open. Tabs with replies you haven't read
@@ -830,6 +920,142 @@ module.exports = class ClaudianMinimalPlugin extends obsidian.Plugin {
       confirm: 'Close tabs',
       onConfirm: run,
     }).open();
+  }
+
+  // ── Open in Claudian ───────────────────────────────────────────
+
+  // Every file and every folder but the vault root gets the item, whatever
+  // the note-following setting. Claudian's own "Add to Claudian" only covers
+  // files, and pastes a mention instead of linking.
+  extendFileMenu(menu, file) {
+    if (!this.settings.folderChats) return;
+    if (!(file instanceof TFile) && !(file instanceof TFolder && !file.isRoot())) return;
+    let added = null;
+    menu.addItem((i) => {
+      added = i;
+      i.setTitle('Open in Claudian')
+        .setIcon('message-square')
+        .onClick(() => this.openChatFor(file));
+    });
+    this.placeBeforeTerminal(menu, added);
+  }
+
+  // The Terminal plugin's "Open in terminal" items share the item's section
+  // and come first, so the item moves up to lead that group.
+  placeBeforeTerminal(menu, item) {
+    try {
+      const items = menu.items;
+      if (!item || !Array.isArray(items)) return;
+      const title = (i) => (i && i.titleEl && i.titleEl.textContent) || '';
+      const first = items.findIndex((i) => i !== item && title(i).startsWith('Open in terminal'));
+      const own = items.indexOf(item);
+      if (first < 0 || own < first) return;
+      items.splice(own, 1);
+      items.splice(first, 0, item);
+      item.setSection(items[first + 1].section || '');
+    } catch (e) {
+      this.warn('file menu', e);
+    }
+  }
+
+  async openChatFor(file) {
+    const path = file.path;
+    this.syncing++; // mutes the note-following and the reveal on tab switch
+    try {
+      const view = await this.claudianView();
+      if (!view) throw new Error('no Claudian view');
+      const tm = view.tabManager;
+      const existing = this.tabFor(view, path);
+      if (existing) {
+        if (existing !== tm.getActiveTabId()) await tm.switchToTab(existing);
+      } else {
+        if (typeof tm.createTab !== 'function') throw new Error('tabManager.createTab is missing');
+        if (typeof tm.canCreateTab === 'function' && !tm.canCreateTab()) {
+          new obsidian.Notice("Claudian can't open another tab right now.");
+          return;
+        }
+        // The latest conversation linked to it, in a new tab, or a new empty
+        // tab linked to it explicitly, so it doesn't follow the active note.
+        const conv = this.latestConversation(view, path);
+        const made = await tm.createTab(conv ? conv.id : null, null, { activate: true });
+        if (!conv) {
+          const tab = made && made.linkedContent ? made : typeof tm.getActiveTab === 'function' ? tm.getActiveTab() : null;
+          const lc = tab && tab.linkedContent;
+          if (!lc || typeof lc.selectExplicit !== 'function') throw new Error('linkedContent.selectExplicit is missing');
+          lc.selectExplicit(path);
+        }
+      }
+      // A file opens next to the chat, so the two stay paired.
+      if (file instanceof TFile) await this.openBeside(view, file);
+      // Brings the chat forward and puts the cursor in the input.
+      const claudian = view.plugin;
+      if (claudian && typeof claudian.activateView === 'function') await claudian.activateView(view.leaf);
+      else await this.app.workspace.revealLeaf(view.leaf);
+      // Opening the file can make its leaf active after the chat took focus.
+      const ws = this.app.workspace;
+      if (ws.activeLeaf !== view.leaf) {
+        ws.setActiveLeaf(view.leaf, { focus: true });
+        if (typeof view.focusActiveInput === 'function') view.focusActiveInput();
+      }
+    } catch (e) {
+      this.warn('open in claudian', e);
+      new obsidian.Notice("Couldn't open this in Claudian. This Claudian version may not be supported yet.");
+    } finally {
+      this.syncing--;
+    }
+  }
+
+  // Brings forward a leaf that already shows the file, else opens it in the
+  // most recent main-area leaf. Files Obsidian has no viewer for are skipped.
+  async openBeside(view, file) {
+    const registry = this.app.viewRegistry;
+    if (registry && typeof registry.isExtensionRegistered === 'function' && !registry.isExtensionRegistered(file.extension)) return;
+    await this.revealFile(view, file, ++this.revealSeq);
+  }
+
+  // The first Claudian view, opened if there is none yet.
+  async claudianView() {
+    let view = this.views()[0];
+    if (view) return view;
+    const plugins = this.app.plugins;
+    const claudian = plugins && typeof plugins.getPlugin === 'function' ? plugins.getPlugin(CLAUDIAN_ID) : null;
+    if (!claudian || typeof claudian.activateView !== 'function') return null;
+    await claudian.activateView();
+    const until = Date.now() + VIEW_WAIT_MS;
+    while (!(view = this.views()[0]) && Date.now() < until) {
+      await new Promise((r) => window.setTimeout(r, 100));
+    }
+    return view || null;
+  }
+
+  // Expands the folder's parents and highlights it in the file explorer,
+  // showing the explorer if its sidebar is collapsed. Obsidian's
+  // revealInFolder makes the explorer the active leaf a frame later, so the
+  // chat gets the active leaf and the focus back afterwards.
+  async revealFolder(view, folder) {
+    const ws = this.app.workspace;
+    const leaf = ws.getLeavesOfType('file-explorer')[0];
+    const explorer = leaf && leaf.view;
+    if (!explorer || typeof explorer.revealInFolder !== 'function') return;
+    const doc = (view.containerEl && view.containerEl.ownerDocument) || document;
+    const focused = doc.activeElement;
+    if (typeof ws.revealLeaf === 'function') await ws.revealLeaf(leaf);
+    explorer.revealInFolder(folder);
+    const item = explorer.fileItems && explorer.fileItems[folder.path];
+    const el = item && item.selfEl;
+    if (el && el.classList) {
+      el.classList.add(FOLDER_REVEAL);
+      window.setTimeout(() => el.classList.remove(FOLDER_REVEAL), FOLDER_REVEAL_MS);
+    }
+    window.setTimeout(() => {
+      try {
+        if (ws.activeLeaf !== leaf) return; // you moved on
+        ws.setActiveLeaf(view.leaf, { focus: false });
+        if (focused && view.containerEl.contains(focused) && typeof focused.focus === 'function') focused.focus();
+      } catch (e) {
+        this.warn('reveal', e);
+      }
+    }, 100);
   }
 
   // ── Compact from the context gauge ─────────────────────────────
@@ -982,6 +1208,10 @@ module.exports = class ClaudianMinimalPlugin extends obsidian.Plugin {
     const ident = this.identities(view).find((i) => i.id === after);
     const path = this.linkedPath(view, ident);
     const file = path ? this.app.vault.getAbstractFileByPath(path) : null;
+    if (file instanceof TFolder) {
+      if (this.settings.folderChats) this.revealFolder(view, file).catch((e) => this.warn('reveal', e));
+      return;
+    }
     if (!(file instanceof TFile)) return;
     const seq = ++this.revealSeq;
     this.revealFile(view, file, seq).catch((e) => this.warn('reveal', e));
@@ -1295,6 +1525,7 @@ module.exports = class ClaudianMinimalPlugin extends obsidian.Plugin {
       if (ident.id === activeId || !this.isEmptyTab(view, ident.id)) continue;
       const path = this.linkedPath(view, ident);
       if (path && open.has(path)) continue;
+      if (this.settings.folderChats && path && this.app.vault.getAbstractFileByPath(path) instanceof TFolder) continue; // you opened it on purpose
       out.push(ident.id);
     }
     // Keep at least one tab.
@@ -1381,6 +1612,22 @@ module.exports = class ClaudianMinimalPlugin extends obsidian.Plugin {
         })
         .sort((a, b) => a.key - b.key || a.i - b.i)
         .map((x) => x.item);
+    }
+    // Folder tabs have no Obsidian tab to follow: they come first, A to Z by
+    // name (then path), and the other tabs keep their order after them.
+    if (this.settings.folderChats) {
+      const folders = [];
+      const rest = [];
+      for (const item of out) {
+        const path = pathOf(item);
+        if (path && this.app.vault.getAbstractFileByPath(path) instanceof TFolder) folders.push({ item, path, name: this.noteName(path) || path });
+        else rest.push(item);
+      }
+      if (folders.length > 0) {
+        const cmp = (a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' });
+        folders.sort((a, b) => cmp(a.name, b.name) || cmp(a.path, b.path));
+        out = [...folders.map((f) => f.item), ...rest];
+      }
     }
     if (expandedNew) {
       this.saveSoon();

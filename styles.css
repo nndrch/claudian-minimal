@@ -511,3 +511,13 @@ body .claudian-context-meter {
 body .claudian-composer-dropdown-match {
   color: var(--cm-accent, var(--text-accent));
 }
+
+/* ── Folder chats: the revealed folder ──────────────────────────
+   Obsidian flashes a revealed item with its highlight color (a pale
+   yellow by default). A folder revealed by the plugin flashes with a
+   shade of the accent instead. Obsidian's rule sets the background with
+   !important from --highlight-background, so the variable is overridden. */
+.nav-folder-title.cm-folder-reveal {
+  --highlight-background: color-mix(in srgb, var(--cm-accent, var(--interactive-accent)) 25%, transparent);
+  --highlight-mix-blend-mode: normal;
+}
