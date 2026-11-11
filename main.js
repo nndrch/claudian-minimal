@@ -36,12 +36,12 @@
      tab bar stays visible with a single tab, as Obsidian's does, and lists
      the tabs in the order of their notes in Obsidian (display only:
      Claudian's own order is private).
-   - Folder chats (on by default): right-click a folder in the file
-     explorer and choose "Open in Claudian". It switches to a tab linked to
-     the folder, else reopens the folder's latest conversation, else opens a
-     new tab linked to it. Switching to a folder's tab reveals the folder in
-     the file explorer when "Open the note on tab switch" is on. Folder
-     tabs come first in the tab bar, A to Z.
+   - Open in Claudian (on by default): right-click a folder or a file and
+     choose "Open in Claudian". It switches to a tab linked to it, else
+     reopens its latest conversation, else opens a new tab linked to it. A
+     file also opens in the editor. Switching to a folder's tab reveals the
+     folder in the file explorer when "Open the note on tab switch" is on.
+     Folder tabs come first in the tab bar, A to Z.
    - Close other tabs: an item in Claudian's tab menu (right-click a tab)
      that closes every other tab. Tabs that are working stay open. If some
      have replies you haven't read, it asks first.
@@ -392,8 +392,8 @@ class ClaudianMinimalSettingTab extends PluginSettingTab {
       ),
       toggle(
         'folderChats',
-        'Open folders in Claudian',
-        'Adds "Open in Claudian" to a folder\'s right-click menu in the file explorer. It switches to the chat tab linked to the folder; with none, the folder\'s latest conversation reopens or a new tab starts, linked to the folder. With "Open the linked note when switching tabs" on, switching to a folder\'s tab reveals the folder in the file explorer. Folder tabs come first in the tab bar, A to Z.'
+        'Open in Claudian from the file menu',
+        'Adds "Open in Claudian" to the right-click menu of folders and files. It switches to the chat tab linked to it; with none, its latest conversation reopens or a new tab starts, linked to it. A file also opens in the editor. With "Open the linked note when switching tabs" on, switching to a folder\'s tab reveals the folder in the file explorer. Folder tabs come first in the tab bar, A to Z.'
       ),
       toggle('hideWelcome', 'Hide the welcome brand and greeting', 'Hide the Claudian name and the greeting on the empty chat screen.'),
       {
@@ -922,18 +922,20 @@ module.exports = class ClaudianMinimalPlugin extends obsidian.Plugin {
     }).open();
   }
 
-  // ── Folder chats ───────────────────────────────────────────────
+  // ── Open in Claudian ───────────────────────────────────────────
 
-  // Every folder but the vault root gets the item. Claudian's own "Add to
-  // Claudian" only covers files, and pastes a mention instead of linking.
+  // Every file and every folder but the vault root gets the item, whatever
+  // the note-following setting. Claudian's own "Add to Claudian" only covers
+  // files, and pastes a mention instead of linking.
   extendFileMenu(menu, file) {
-    if (!this.settings.folderChats || !(file instanceof TFolder) || file.isRoot()) return;
+    if (!this.settings.folderChats) return;
+    if (!(file instanceof TFile) && !(file instanceof TFolder && !file.isRoot())) return;
     let added = null;
     menu.addItem((i) => {
       added = i;
       i.setTitle('Open in Claudian')
         .setIcon('message-square')
-        .onClick(() => this.openFolderChat(file.path));
+        .onClick(() => this.openChatFor(file));
     });
     this.placeBeforeTerminal(menu, added);
   }
@@ -956,7 +958,8 @@ module.exports = class ClaudianMinimalPlugin extends obsidian.Plugin {
     }
   }
 
-  async openFolderChat(path) {
+  async openChatFor(file) {
+    const path = file.path;
     this.syncing++; // mutes the note-following and the reveal on tab switch
     try {
       const view = await this.claudianView();
@@ -971,9 +974,8 @@ module.exports = class ClaudianMinimalPlugin extends obsidian.Plugin {
           new obsidian.Notice("Claudian can't open another tab right now.");
           return;
         }
-        // The latest conversation linked to the folder, in a new tab, or a
-        // new empty tab linked to it explicitly, so it doesn't follow the
-        // active note.
+        // The latest conversation linked to it, in a new tab, or a new empty
+        // tab linked to it explicitly, so it doesn't follow the active note.
         const conv = this.latestConversation(view, path);
         const made = await tm.createTab(conv ? conv.id : null, null, { activate: true });
         if (!conv) {
@@ -983,16 +985,32 @@ module.exports = class ClaudianMinimalPlugin extends obsidian.Plugin {
           lc.selectExplicit(path);
         }
       }
+      // A file opens next to the chat, so the two stay paired.
+      if (file instanceof TFile) await this.openBeside(view, file);
       // Brings the chat forward and puts the cursor in the input.
       const claudian = view.plugin;
       if (claudian && typeof claudian.activateView === 'function') await claudian.activateView(view.leaf);
-      else this.app.workspace.revealLeaf(view.leaf);
+      else await this.app.workspace.revealLeaf(view.leaf);
+      // Opening the file can make its leaf active after the chat took focus.
+      const ws = this.app.workspace;
+      if (ws.activeLeaf !== view.leaf) {
+        ws.setActiveLeaf(view.leaf, { focus: true });
+        if (typeof view.focusActiveInput === 'function') view.focusActiveInput();
+      }
     } catch (e) {
-      this.warn('folder', e);
-      new obsidian.Notice("Couldn't open the folder in Claudian. This Claudian version may not be supported yet.");
+      this.warn('open in claudian', e);
+      new obsidian.Notice("Couldn't open this in Claudian. This Claudian version may not be supported yet.");
     } finally {
       this.syncing--;
     }
+  }
+
+  // Brings forward a leaf that already shows the file, else opens it in the
+  // most recent main-area leaf. Files Obsidian has no viewer for are skipped.
+  async openBeside(view, file) {
+    const registry = this.app.viewRegistry;
+    if (registry && typeof registry.isExtensionRegistered === 'function' && !registry.isExtensionRegistered(file.extension)) return;
+    await this.revealFile(view, file, ++this.revealSeq);
   }
 
   // The first Claudian view, opened if there is none yet.
