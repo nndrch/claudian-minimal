@@ -15,14 +15,14 @@ From the [plugin page](https://community.obsidian.md/plugins/claudian-minimal), 
 - **Review: Passed,** no issues. Resolved since 2026-10-28: the `:has` selectors, the missing attestations and the missing release description.
 - Build verified against source. The release assets have verified GitHub artifact attestations. No suspicious network patterns, vulnerable dependencies or obfuscation. Malware scan not available.
 
-## Claudian 2.3.39–2.3.42 · reviewed 2026-11-11 · ⚠️ Fixed
+## Claudian 2.3.39–2.3.42 · tested 2026-11-11 · ⚠️ Fixed
 
-Reviewed against the `feat/folder-chats` branch (folder chats, 1.2.0). Every class and internal still exists with the same shape. Not yet tested in a running 2.3.42.
+Reviewed against 1.2.0 ([PR #11](https://github.com/nndrch/claudian-minimal/pull/11)). Every class and internal still exists with the same shape, and *Open in Claudian*, the tab order and the turned-off tab moves were checked in a running Claudian 2.3.42.
 
 - **Fine:** the tab manager, tab bar and `linkedContent` internals are unchanged; 2.3.42 moved `linkedContent`'s mode into a state object, but `getSnapshot().mode`, `selectExplicit` and the two active-file handlers keep their behavior. `plugin.activateView(leaf)` gained an optional second argument.
 - **Fine:** Claudian's own *Add to Claudian* still covers files only, so folders get one item.
 - **Fixed:** 2.3.42 lets you reorder tabs by dragging them or from the tab menu ([#2205](https://github.com/YishenTu/claudian/pull/2205)). The plugin orders the tab bar itself (notes in Obsidian's order, folders first), which would undo a move on the next redraw. While it orders the tabs, dragging and *Move left* / *Move right* are turned off (a capture `pointerdown` listener, a wrapped `tabBar.callbacks.onTabMove`, and the menu items removed by their icons).
-- **New internals for Open in Claudian:** `tabManager.createTab`, `tabManager.switchToTab`, `linkedContent.selectExplicit`, `plugin.activateView(leaf)`, and Obsidian's internal `revealInFolder` and `fileItems` on the file explorer view and `viewRegistry.isExtensionRegistered`. Checked in a running Claudian 2.3.38.
+- **New internals for Open in Claudian:** `tabManager.createTab`, `tabManager.switchToTab`, `linkedContent.selectExplicit`, `plugin.activateView(leaf)`, and Obsidian's internal `revealInFolder` and `fileItems` on the file explorer view and `viewRegistry.isExtensionRegistered`. Checked in running Claudian 2.3.38 and 2.3.42.
 
 ## Claudian 2.3.36–2.3.38 · reviewed 2026-11-02 · 🆕 New UI
 
